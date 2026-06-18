@@ -6,7 +6,7 @@ import os
 from datetime import datetime
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
-from utils import get_movie_info, format_movie_message_arabic
+from deep_translator import GoogleTranslator
 
 # ========== إعدادات البوت ==========
 BOT_TOKEN = "8865462282:AAFOQwUBO9eMxhMmLOrBrj5_voIjb4_FgDw"
@@ -43,14 +43,51 @@ def is_movie_published(imdb_id):
     published = load_published_movies()
     return any(p.get("imdb_id") == imdb_id for p in published)
 
+# ========== دالة جلب معلومات الفيلم ==========
+async def get_movie_info(movie_name):
+    movie_name = movie_name.strip()
+    url = f"https://www.omdbapi.com/?t={movie_name}&apikey={OMDB_API_KEY}&plot=full"
+    
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+    }
+    
+    async with aiohttp.ClientSession() as session:
+        try:
+            async with session.get(url, headers=headers, timeout=15) as response:
+                if response.status != 200:
+                    return None
+                data = await response.json()
+                
+                if data.get("Response") == "True":
+                    return {
+                        "title": data.get("Title", "غير معروف"),
+                        "year": data.get("Year", "غير معروف"),
+                        "rated": data.get("Rated", "غير معروف"),
+                        "released": data.get("Released", "غير معروف"),
+                        "runtime": data.get("Runtime", "غير معروف"),
+                        "genre": data.get("Genre", "غير معروف"),
+                        "director": data.get("Director", "غير معروف"),
+                        "writer": data.get("Writer", "غير معروف"),
+                        "actors": data.get("Actors", "غير معروف"),
+                        "plot": data.get("Plot", "غير معروف"),
+                        "imdb_rating": data.get("imdbRating", "غير معروف"),
+                        "poster": data.get("Poster", ""),
+                        "imdb_id": data.get("imdbID", "")
+                    }
+                else:
+                    return None
+        except Exception as e:
+            print(f"خطأ في جلب الفيلم {movie_name}: {e}")
+            return None
+
 # ========== دالة جلب فيلم عشوائي ==========
 async def get_random_movie_from_omdb():
     keywords = [
         "love", "war", "action", "comedy", "drama", "horror", "thriller",
         "science", "fantasy", "adventure", "crime", "mystery", "romance",
         "family", "animation", "musical", "western", "sports", "history",
-        "dream", "star", "moon", "sun", "life", "death", "time", "space",
-        "world", "king", "queen", "lord", "lady", "knight", "warrior"
+        "dream", "star", "moon", "sun", "life", "death", "time", "space"
     ]
     
     keyword = random.choice(keywords)
@@ -64,9 +101,7 @@ async def get_random_movie_from_omdb():
         try:
             async with session.get(url, headers=headers, timeout=15) as response:
                 if response.status != 200:
-                    print(f"خطأ في الاتصال: {response.status}")
                     return None
-                    
                 data = await response.json()
                 
                 if data.get("Response") == "True" and data.get("Search"):
@@ -82,14 +117,8 @@ async def get_random_movie_from_omdb():
                         
                         if detail_data.get("Response") == "True":
                             return detail_data
-        except asyncio.TimeoutError:
-            print("انتهى الوقت في جلب الفيلم")
-            return None
-        except aiohttp.ClientError as e:
-            print(f"خطأ في الاتصال: {e}")
-            return None
         except Exception as e:
-            print(f"خطأ غير متوقع: {e}")
+            print(f"خطأ: {e}")
             return None
     
     return None
@@ -108,14 +137,51 @@ async def get_unpublished_movie(max_attempts=20):
             continue
     return None
 
+# ========== دالة الترجمة ==========
+translator = GoogleTranslator(source='en', target='ar')
+
+def translate_to_arabic(text):
+    try:
+        if text and text != "غير معروف" and text != "N/A":
+            return translator.translate(text[:500])
+        else:
+            return text
+    except Exception as e:
+        return text
+
+def format_movie_message_arabic(movie_info):
+    if not movie_info:
+        return "❌ الفيلم غير موجود!"
+    
+    plot_text = movie_info['plot']
+    plot_arabic = translate_to_arabic(plot_text)
+    genre_arabic = translate_to_arabic(movie_info['genre'])
+    
+    return f"""
+🎬 *{movie_info['title']}* ({movie_info['year']})
+
+⭐ التقييم: {movie_info['imdb_rating']}/10
+📅 السنة: {movie_info['year']}
+⏱ المدة: {movie_info['runtime']}
+🎭 النوع: {genre_arabic}
+🎥 المخرج: {movie_info['director']}
+👥 الممثلون: {movie_info['actors']}
+📆 تاريخ الإصدار: {movie_info['released']}
+🔞 التصنيف العمري: {movie_info['rated']}
+
+📝 القصة (بالعربية):
+{plot_arabic}
+
+🔗 IMDb: https://www.imdb.com/title/{movie_info['imdb_id']}/
+"""
+
 # ========== أوامر البوت ==========
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     published = load_published_movies()
     await update.message.reply_text(
         "🎬 *مرحباً! أنا بوت الأفلام*\n\n"
         "📌 الأوامر المتاحة:\n"
-        "/movie اسم_الفيلم - للبحث عن فيلم (مع ترجمة)\n"
-        "/search اسم_الفيلم - للبحث والنشر في القناة\n"
+        "/movie اسم_الفيلم - للبحث عن فيلم\n"
         "/suggest - اقتراح فيلم عشوائي\n"
         "/publish - نشر فيلم عشوائي في القناة\n"
         "/stats - عرض عدد الأفلام المنشورة\n\n"
@@ -156,44 +222,6 @@ async def movie(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await loading_msg.delete()
     except Exception as e:
         await loading_msg.edit_text(f"❌ حدث خطأ: {str(e)}")
-
-async def search(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    if user_id != OWNER_ID:
-        await update.message.reply_text("⛔ هذا الأمر للمالك فقط!")
-        return
-    
-    text = update.message.text
-    parts = text.split(" ", 1)
-    if len(parts) < 2:
-        await update.message.reply_text("⚠️ اكتب اسم الفيلم بعد الأمر.\nمثال: `/search Interstellar`")
-        return
-    
-    movie_name = parts[1]
-    loading_msg = await update.message.reply_text(f"🔍 جاري البحث عن: *{movie_name}*...", parse_mode="Markdown")
-    
-    movie_info = await get_movie_info(movie_name)
-    if not movie_info:
-        await loading_msg.edit_text(f"❌ ما لقيت فيلم باسم: *{movie_name}*", parse_mode="Markdown")
-        return
-    
-    caption = format_movie_message_arabic(movie_info)
-    poster_url = movie_info.get("poster", "")
-    
-    try:
-        if poster_url and poster_url != "N/A":
-            short_caption = f"🎬 *{movie_info['title']}* ({movie_info['year']})"
-            await context.bot.send_photo(chat_id=CHANNEL_ID, photo=poster_url, caption=short_caption, parse_mode="Markdown")
-            await context.bot.send_message(chat_id=CHANNEL_ID, text=caption, parse_mode="Markdown", disable_web_page_preview=True)
-        else:
-            await context.bot.send_message(chat_id=CHANNEL_ID, text=caption, parse_mode="Markdown", disable_web_page_preview=True)
-        
-        imdb_id = movie_info.get("imdb_id")
-        if imdb_id:
-            save_published_movie(movie_info['title'], imdb_id)
-        await loading_msg.edit_text(f"✅ تم نشر *{movie_info['title']}* في القناة!", parse_mode="Markdown")
-    except Exception as e:
-        await loading_msg.edit_text(f"❌ حدث خطأ في النشر: {str(e)}")
 
 async def suggest(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -312,6 +340,68 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode="Markdown"
         )
 
+# ========== مهمة النشر التلقائي كل ساعة ==========
+async def auto_publish(bot):
+    """تنشر فيلم عشوائي في القناة كل ساعة"""
+    while True:
+        try:
+            # ننتظر ساعة كاملة (3600 ثانية)
+            await asyncio.sleep(3600)
+            
+            print("🔄 جاري النشر التلقائي...")
+            
+            # نبحث عن فيلم غير منشور
+            movie_data = await get_unpublished_movie()
+            
+            if movie_data:
+                movie_info = {
+                    "title": movie_data.get("Title", "غير معروف"),
+                    "year": movie_data.get("Year", "غير معروف"),
+                    "rated": movie_data.get("Rated", "غير معروف"),
+                    "released": movie_data.get("Released", "غير معروف"),
+                    "runtime": movie_data.get("Runtime", "غير معروف"),
+                    "genre": movie_data.get("Genre", "غير معروف"),
+                    "director": movie_data.get("Director", "غير معروف"),
+                    "writer": movie_data.get("Writer", "غير معروف"),
+                    "actors": movie_data.get("Actors", "غير معروف"),
+                    "plot": movie_data.get("Plot", "غير معروف"),
+                    "imdb_rating": movie_data.get("imdbRating", "غير معروف"),
+                    "poster": movie_data.get("Poster", ""),
+                    "imdb_id": movie_data.get("imdbID", "")
+                }
+                
+                caption = format_movie_message_arabic(movie_info)
+                poster_url = movie_info.get("poster", "")
+                
+                # ننشر في القناة
+                if poster_url and poster_url != "N/A":
+                    await bot.send_photo(
+                        chat_id=CHANNEL_ID,
+                        photo=poster_url,
+                        caption=caption,
+                        parse_mode="Markdown"
+                    )
+                else:
+                    await bot.send_message(
+                        chat_id=CHANNEL_ID,
+                        text=caption,
+                        parse_mode="Markdown"
+                    )
+                
+                # نحفظ الفيلم المنشور
+                imdb_id = movie_info.get("imdb_id")
+                if imdb_id:
+                    save_published_movie(movie_info['title'], imdb_id)
+                
+                published = load_published_movies()
+                print(f"✅ تم النشر التلقائي: {movie_info['title']} (إجمالي: {len(published)})")
+            else:
+                print("❌ ما لقيت فيلم جديد للنشر التلقائي")
+                
+        except Exception as e:
+            print(f"❌ خطأ في النشر التلقائي: {e}")
+            await asyncio.sleep(60)  # ننتظر دقيقة قبل المحاولة مرة ثانية
+
 # ========== تشغيل البوت ==========
 def main():
     print("=" * 50)
@@ -320,20 +410,27 @@ def main():
     print("=" * 50)
     print("🚀 جاري تشغيل البوت...")
     
-    # نستخدم الإعدادات العادية بدون بروكسي
+    # ننشئ التطبيق
     application = Application.builder().token(BOT_TOKEN).build()
     
+    # نضيف الأوامر
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("movie", movie))
-    application.add_handler(CommandHandler("search", search))
     application.add_handler(CommandHandler("suggest", suggest))
     application.add_handler(CommandHandler("publish", publish))
     application.add_handler(CommandHandler("stats", stats))
     
     print("✅ البوت شغال! انتظر الأوامر...")
     print("💡 اكتب /start في البوت")
+    print("⏰ سيبدأ النشر التلقائي بعد ساعة من الآن...")
     print("-" * 50)
     
+    # نشغل مهمة النشر التلقائي في الخلفية
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    loop.create_task(auto_publish(application.bot))
+    
+    # نشغل البوت
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == "__main__":
