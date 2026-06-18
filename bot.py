@@ -158,7 +158,7 @@ def format_movie_message_arabic(movie_info):
     genre_arabic = translate_to_arabic(movie_info['genre'])
     
     return f"""
-🎬 *{movie_info['title']}* ({movie_info['year']})
+🎬 {movie_info['title']} ({movie_info['year']})
 
 ⭐ التقييم: {movie_info['imdb_rating']}/10
 📅 السنة: {movie_info['year']}
@@ -179,14 +179,13 @@ def format_movie_message_arabic(movie_info):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     published = load_published_movies()
     await update.message.reply_text(
-        "🎬 *مرحباً! أنا بوت الأفلام*\n\n"
-        "📌 الأوامر المتاحة:\n"
-        "/movie اسم_الفيلم - للبحث عن فيلم\n"
-        "/suggest - اقتراح فيلم عشوائي\n"
-        "/publish - نشر فيلم عشوائي في القناة\n"
-        "/stats - عرض عدد الأفلام المنشورة\n\n"
-        f"📊 عدد الأفلام المنشورة: {len(published)}",
-        parse_mode="Markdown"
+        f"🎬 مرحباً! أنا بوت الأفلام\n\n"
+        f"📌 الأوامر المتاحة:\n"
+        f"/movie اسم_الفيلم - للبحث عن فيلم\n"
+        f"/suggest - اقتراح فيلم عشوائي\n"
+        f"/publish - نشر فيلم عشوائي في القناة\n"
+        f"/stats - عرض عدد الأفلام المنشورة\n\n"
+        f"📊 عدد الأفلام المنشورة: {len(published)}"
     )
 
 async def movie(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -198,15 +197,15 @@ async def movie(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
     parts = text.split(" ", 1)
     if len(parts) < 2:
-        await update.message.reply_text("⚠️ اكتب اسم الفيلم بعد الأمر.\nمثال: `/movie Interstellar`")
+        await update.message.reply_text("⚠️ اكتب اسم الفيلم بعد الأمر.\nمثال: /movie Interstellar")
         return
     
     movie_name = parts[1]
-    loading_msg = await update.message.reply_text(f"🔍 جاري البحث عن: *{movie_name}*...", parse_mode="Markdown")
+    loading_msg = await update.message.reply_text(f"🔍 جاري البحث عن: {movie_name}...")
     
     movie_info = await get_movie_info(movie_name)
     if not movie_info:
-        await loading_msg.edit_text(f"❌ ما لقيت فيلم باسم: *{movie_name}*", parse_mode="Markdown")
+        await loading_msg.edit_text(f"❌ ما لقيت فيلم باسم: {movie_name}")
         return
     
     caption = format_movie_message_arabic(movie_info)
@@ -214,11 +213,11 @@ async def movie(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     try:
         if poster_url and poster_url != "N/A":
-            short_caption = f"🎬 *{movie_info['title']}* ({movie_info['year']})"
-            await update.message.reply_photo(photo=poster_url, caption=short_caption, parse_mode="Markdown")
-            await update.message.reply_text(text=caption, parse_mode="Markdown", disable_web_page_preview=True)
+            short_caption = f"🎬 {movie_info['title']} ({movie_info['year']})"
+            await update.message.reply_photo(photo=poster_url, caption=short_caption)
+            await update.message.reply_text(text=caption)
         else:
-            await update.message.reply_text(text=caption, parse_mode="Markdown", disable_web_page_preview=True)
+            await update.message.reply_text(text=caption)
         await loading_msg.delete()
     except Exception as e:
         await loading_msg.edit_text(f"❌ حدث خطأ: {str(e)}")
@@ -229,11 +228,11 @@ async def suggest(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("⛔ هذا الأمر للمالك فقط!")
         return
     
-    loading_msg = await update.message.reply_text("🔍 جاري البحث عن فيلم عشوائي...", parse_mode="Markdown")
+    loading_msg = await update.message.reply_text("🔍 جاري البحث عن فيلم عشوائي...")
     movie_data = await get_unpublished_movie()
     
     if not movie_data:
-        await loading_msg.edit_text("❌ ما لقيت فيلم جديد! جرب مرة ثانية.", parse_mode="Markdown")
+        await loading_msg.edit_text("❌ ما لقيت فيلم جديد! جرب مرة ثانية.")
         return
     
     movie_info = {
@@ -257,11 +256,11 @@ async def suggest(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     try:
         if poster_url and poster_url != "N/A":
-            short_caption = f"🎬 *{movie_info['title']}* ({movie_info['year']})"
-            await update.message.reply_photo(photo=poster_url, caption=short_caption, parse_mode="Markdown")
-            await update.message.reply_text(text=caption, parse_mode="Markdown", disable_web_page_preview=True)
+            short_caption = f"🎬 {movie_info['title']} ({movie_info['year']})"
+            await update.message.reply_photo(photo=poster_url, caption=short_caption)
+            await update.message.reply_text(text=caption)
         else:
-            await update.message.reply_text(text=caption, parse_mode="Markdown", disable_web_page_preview=True)
+            await update.message.reply_text(text=caption)
         await loading_msg.delete()
     except Exception as e:
         await loading_msg.edit_text(f"❌ حدث خطأ: {str(e)}")
@@ -272,11 +271,11 @@ async def publish(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("⛔ هذا الأمر للمالك فقط!")
         return
     
-    loading_msg = await update.message.reply_text("🔍 جاري البحث عن فيلم للنشر...", parse_mode="Markdown")
+    loading_msg = await update.message.reply_text("🔍 جاري البحث عن فيلم للنشر...")
     movie_data = await get_unpublished_movie()
     
     if not movie_data:
-        await loading_msg.edit_text("❌ ما لقيت فيلم جديد! جرب مرة ثانية.", parse_mode="Markdown")
+        await loading_msg.edit_text("❌ ما لقيت فيلم جديد! جرب مرة ثانية.")
         return
     
     movie_info = {
@@ -300,18 +299,18 @@ async def publish(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     try:
         if poster_url and poster_url != "N/A":
-            short_caption = f"🎬 *{movie_info['title']}* ({movie_info['year']})"
-            await context.bot.send_photo(chat_id=CHANNEL_ID, photo=poster_url, caption=short_caption, parse_mode="Markdown")
-            await context.bot.send_message(chat_id=CHANNEL_ID, text=caption, parse_mode="Markdown", disable_web_page_preview=True)
+            short_caption = f"🎬 {movie_info['title']} ({movie_info['year']})"
+            await context.bot.send_photo(chat_id=CHANNEL_ID, photo=poster_url, caption=short_caption)
+            await context.bot.send_message(chat_id=CHANNEL_ID, text=caption)
         else:
-            await context.bot.send_message(chat_id=CHANNEL_ID, text=caption, parse_mode="Markdown", disable_web_page_preview=True)
+            await context.bot.send_message(chat_id=CHANNEL_ID, text=caption)
         
         imdb_id = movie_info.get("imdb_id")
         if imdb_id:
             save_published_movie(movie_info['title'], imdb_id)
         
         published = load_published_movies()
-        await loading_msg.edit_text(f"✅ تم نشر *{movie_info['title']}* في القناة!\n📊 عدد الأفلام المنشورة: {len(published)}", parse_mode="Markdown")
+        await loading_msg.edit_text(f"✅ تم نشر {movie_info['title']} في القناة!\n📊 عدد الأفلام المنشورة: {len(published)}")
     except Exception as e:
         await loading_msg.edit_text(f"❌ حدث خطأ في النشر: {str(e)}")
 
@@ -326,18 +325,16 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if published:
         last_movie = published[-1]
         await update.message.reply_text(
-            f"📊 *إحصائيات البوت*\n\n"
+            f"📊 إحصائيات البوت\n\n"
             f"✅ عدد الأفلام المنشورة: {len(published)}\n"
             f"📝 آخر فيلم تم نشره: {last_movie.get('title', 'غير معروف')}\n"
-            f"📆 تاريخ النشر: {last_movie.get('date', 'غير معروف')}",
-            parse_mode="Markdown"
+            f"📆 تاريخ النشر: {last_movie.get('date', 'غير معروف')}"
         )
     else:
         await update.message.reply_text(
-            f"📊 *إحصائيات البوت*\n\n"
+            f"📊 إحصائيات البوت\n\n"
             f"❌ لم يتم نشر أي فيلم حتى الآن!\n"
-            f"استخدم الأمر `/publish` لنشر أول فيلم.",
-            parse_mode="Markdown"
+            f"استخدم الأمر /publish لنشر أول فيلم."
         )
 
 # ========== مهمة النشر التلقائي كل ساعة ==========
@@ -378,14 +375,12 @@ async def auto_publish(bot):
                     await bot.send_photo(
                         chat_id=CHANNEL_ID,
                         photo=poster_url,
-                        caption=caption,
-                        parse_mode="Markdown"
+                        caption=caption
                     )
                 else:
                     await bot.send_message(
                         chat_id=CHANNEL_ID,
-                        text=caption,
-                        parse_mode="Markdown"
+                        text=caption
                     )
                 
                 # نحفظ الفيلم المنشور
