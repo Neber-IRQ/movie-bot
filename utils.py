@@ -1,12 +1,9 @@
 import aiohttp
-import random
 from config import OMDB_API_KEY
 from deep_translator import GoogleTranslator
 
-# ننشئ مترجم
 translator = GoogleTranslator(source='en', target='ar')
 
-# ========== دالة جلب معلومات الفيلم ==========
 async def get_movie_info(movie_name):
     movie_name = movie_name.strip()
     url = f"https://www.omdbapi.com/?t={movie_name}&apikey={OMDB_API_KEY}&plot=full"
@@ -44,18 +41,15 @@ async def get_movie_info(movie_name):
             print(f"خطأ في جلب الفيلم {movie_name}: {e}")
             return None
 
-# ========== دالة الترجمة للعربية ==========
 def translate_to_arabic(text):
     try:
         if text and text != "غير معروف" and text != "N/A":
-            return translator.translate(text)
+            return translator.translate(text[:500])
         else:
             return text
     except Exception as e:
-        print(f"خطأ في الترجمة: {e}")
         return text
 
-# ========== دالة تنسيق الرسالة ==========
 def format_movie_message_arabic(movie_info):
     if not movie_info:
         return "❌ الفيلم غير موجود!"
@@ -65,7 +59,7 @@ def format_movie_message_arabic(movie_info):
     genre_arabic = translate_to_arabic(movie_info['genre'])
     
     return f"""
-🎬 *{movie_info['title']}* ({movie_info['year']})
+🎬 {movie_info['title']} ({movie_info['year']})
 
 ⭐ التقييم: {movie_info['imdb_rating']}/10
 📅 السنة: {movie_info['year']}
