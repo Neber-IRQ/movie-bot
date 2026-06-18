@@ -339,15 +339,12 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ========== مهمة النشر التلقائي كل ساعة ==========
 async def auto_publish(bot):
-    """تنشر فيلم عشوائي في القناة كل ساعة"""
     while True:
         try:
-            # ننتظر ساعة كاملة (3600 ثانية)
             await asyncio.sleep(3600)
             
             print("🔄 جاري النشر التلقائي...")
             
-            # نبحث عن فيلم غير منشور
             movie_data = await get_unpublished_movie()
             
             if movie_data:
@@ -370,20 +367,11 @@ async def auto_publish(bot):
                 caption = format_movie_message_arabic(movie_info)
                 poster_url = movie_info.get("poster", "")
                 
-                # ننشر في القناة
                 if poster_url and poster_url != "N/A":
-                    await bot.send_photo(
-                        chat_id=CHANNEL_ID,
-                        photo=poster_url,
-                        caption=caption
-                    )
+                    await bot.send_photo(chat_id=CHANNEL_ID, photo=poster_url, caption=caption)
                 else:
-                    await bot.send_message(
-                        chat_id=CHANNEL_ID,
-                        text=caption
-                    )
+                    await bot.send_message(chat_id=CHANNEL_ID, text=caption)
                 
-                # نحفظ الفيلم المنشور
                 imdb_id = movie_info.get("imdb_id")
                 if imdb_id:
                     save_published_movie(movie_info['title'], imdb_id)
@@ -395,7 +383,7 @@ async def auto_publish(bot):
                 
         except Exception as e:
             print(f"❌ خطأ في النشر التلقائي: {e}")
-            await asyncio.sleep(60)  # ننتظر دقيقة قبل المحاولة مرة ثانية
+            await asyncio.sleep(60)
 
 # ========== تشغيل البوت ==========
 def main():
@@ -405,10 +393,8 @@ def main():
     print("=" * 50)
     print("🚀 جاري تشغيل البوت...")
     
-    # ننشئ التطبيق
     application = Application.builder().token(BOT_TOKEN).build()
     
-    # نضيف الأوامر
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("movie", movie))
     application.add_handler(CommandHandler("suggest", suggest))
@@ -420,12 +406,10 @@ def main():
     print("⏰ سيبدأ النشر التلقائي بعد ساعة من الآن...")
     print("-" * 50)
     
-    # نشغل مهمة النشر التلقائي في الخلفية
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     loop.create_task(auto_publish(application.bot))
     
-    # نشغل البوت
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == "__main__":
