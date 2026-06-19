@@ -1,10 +1,11 @@
+import os
+import json
 import asyncio
 import aiohttp
 import random
-import json
-import os
 from datetime import datetime
-from telegram import Update
+from flask import Flask, request, jsonify
+from telegram import Update, Bot
 from telegram.ext import Application, CommandHandler, ContextTypes
 from deep_translator import GoogleTranslator
 
@@ -15,6 +16,11 @@ CHANNEL_ID = "-1001432210812"
 OWNER_ID = 355449817
 
 PUBLISHED_FILE = "published_movies.json"
+
+# ========== إعدادات Flask ==========
+app = Flask(__name__)
+bot = Bot(token=BOT_TOKEN)
+application = None  # سيتم تعيينها لاحقاً
 
 # ========== دوال التخزين ==========
 def load_published_movies():
@@ -43,7 +49,7 @@ def is_movie_published(imdb_id):
     published = load_published_movies()
     return any(p.get("imdb_id") == imdb_id for p in published)
 
-# ========== دالة جلب معلومات الفيلم ==========
+# ========== دوال جلب المعلومات ==========
 async def get_movie_info(movie_name):
     movie_name = movie_name.strip()
     url = f"https://www.omdbapi.com/?t={movie_name}&apikey={OMDB_API_KEY}&plot=full"
@@ -81,7 +87,6 @@ async def get_movie_info(movie_name):
             print(f"خطأ في جلب الفيلم {movie_name}: {e}")
             return None
 
-# ========== دالة جلب فيلم عشوائي ==========
 async def get_random_movie_from_omdb():
     keywords = [
         "love", "war", "action", "comedy", "drama", "horror", "thriller",
@@ -337,27 +342,88 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"استخدم الأمر /publish لنشر أول فيلم."
         )
 
-# ========== تشغيل البوت ==========
-def main():
-    print("=" * 50)
-    print("🎬 بوت الأفلام جاهز للتشغيل!")
-    print("📱 Bot: @AlZalmMoviesBot")
-    print("=" * 50)
-    print("🚀 جاري تشغيل البوت...")
-    
+# ========== تسجيل الأوامر ==========
+def register_handlers():
+    global application
     application = Application.builder().token(BOT_TOKEN).build()
-    
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("movie", movie))
     application.add_handler(CommandHandler("suggest", suggest))
     application.add_handler(CommandHandler("publish", publish))
     application.add_handler(CommandHandler("stats", stats))
+
+# ========== نقطة Webhook ==========
+@app.route('/webhook', methods=['POST'])
+def webhook():
+    try:
+        update_data = request.get_json(force=True)
+        update = Update.de_json(update_data, bot)
+        if application:
+            asyncio.run(application.process_update(update))
+        return jsonify({"status": "ok"})
+    except Exception as e:
+        print(f"خطأ في webhook: {e}")
+        return jsonify({"status": "error"}), 500
+
+@app.route('/')
+def index():
+    return "🎬 البوت شغال!"
+
+# ========== نقطة النشر التلقائي ==========
+@app.route('/publish_now')
+def publish_now():
+    def do_publish():
+        try:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            movie_data = loop.run_until_complete(get_unpublished_movie())
+            loop.close()
+            
+            if movie_data:
+                movie_info = {
+                    "title": movie_data.get("Title", "غير معروف"),
+                    "year": movie_data.get("Year", "غير معروف"),
+                    "rated": movie_data.get("Rated", "غير معروف"),
+                    "released": movie_data.get("Released", "غير معروف"),
+                    "runtime": movie_data.get("Runtime", "غير معروف"),
+                    "genre": movie_data.get("Genre", "غير معروف"),
+                    "director": movie_data.get("Director", "غير معروف"),
+                    "writer": movie_data.get("Writer", "غير معروف"),
+                    "actors": movie_data.get("Actors", "غير معروف"),
+                    "plot": movie_data.get("Plot", "غير معروف"),
+                    "imdb_rating": movie_data.get("imdbRating", "غير معروف"),
+                    "poster": movie_data.get("Poster", ""),
+                    "imdb_id": movie_data.get("imdbID", "")
+                }
+                
+                caption = format_movie_message_arabic(movie_info)
+                poster_url = movie_info.get("poster", "")
+                
+                if poster_url and poster_url != "N/A":
+                    bot.send_photo(chat_id=CHANNEL_ID, photo=poster_url, caption=caption)
+                else:
+                    bot.send_message(chat_id=CHANNEL_ID, text=caption)
+                
+                imdb_id = movie_info.get("imdb_id")
+                if imdb_id:
+                    save_published_movie(movie_info['title'], imdb_id)
+                
+                published = load_published_movies()
+                print(f"✅ تم النشر التلقائي: {movie_info['title']} (إجمالي: {len(published)})")
+            else:
+                print("❌ ما لقيت فيلم جديد للنشر التلقائي")
+        except Exception as e:
+            print(f"خطأ في النشر التلقائي: {e}")
     
-    print("✅ البوت شغال! انتظر الأوامر...")
-    print("💡 اكتب /start في البوت")
-    print("-" * 50)
-    
-    application.run_polling(allowed_updates=Update.ALL_TYPES)
+    import threading
+    threading.Thread(target=do_publish).start()
+    return "✅ جاري النشر..."
+
+if __name__ == '__main__':
+    # تسجيل الأوامر قبل تشغيل الخادم
+    register_handlers()
+    # تشغيل خادم Flask على المنفذ 10000 كما تطلبه Render
+    app.run(host='0.0.0.0', port=10000)
 
 if __name__ == "__main__":
     main()
