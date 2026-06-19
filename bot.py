@@ -1,17 +1,17 @@
 import os
 import json
-import asyncio
 import logging
 import aiohttp
 import random
 import threading
 from datetime import datetime
-from flask import Flask, request, jsonify
+from fastapi import FastAPI, Request, Response, HTTPException
 from telegram import Update, Bot
 from telegram.ext import Application, CommandHandler, ContextTypes
 from deep_translator import GoogleTranslator
+import uvicorn
 
-# ========== إعدادات التسجيل (لتشخيص الأخطاء) ==========
+# ========== إعدادات التسجيل ==========
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
@@ -26,8 +26,8 @@ OWNER_ID = 355449817
 
 PUBLISHED_FILE = "published_movies.json"
 
-# ========== إعدادات Flask ==========
-app = Flask(__name__)
+# ========== إعدادات FastAPI ==========
+app = FastAPI()
 bot = Bot(token=BOT_TOKEN)
 telegram_app = None
 
@@ -362,40 +362,30 @@ def register_handlers():
     telegram_app.add_handler(CommandHandler("publish", publish))
     telegram_app.add_handler(CommandHandler("stats", stats))
 
-# ========== نقطة Webhook (محسنة) ==========
-@app.route('/webhook', methods=['POST'])
-def webhook():
+# ========== نقطة Webhook (باستخدام FastAPI) ==========
+@app.post("/webhook")
+async def webhook(request: Request):
     try:
-        update_data = request.get_json(force=True)
-        update = Update.de_json(update_data, bot)
+        req_data = await request.json()
+        update = Update.de_json(req_data, bot)
         if telegram_app:
-            # إنشاء حلقة حدث جديدة لكل طلب
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            try:
-                # تهيئة التطبيق قبل المعالجة (هام جداً)
-                loop.run_until_complete(telegram_app.initialize())
-                loop.run_until_complete(telegram_app.process_update(update))
-                loop.close()
-                return jsonify({"status": "ok"})
-            except Exception as e:
-                logger.error(f"خطأ في معالجة التحديث: {e}", exc_info=True)
-                loop.close()
-                return jsonify({"status": "error"}), 500
+            await telegram_app.initialize()
+            await telegram_app.process_update(update)
+            return Response(status_code=200)
         else:
             logger.error("التطبيق لم يتم تهيئته بعد!")
-            return jsonify({"status": "error"}), 500
+            raise HTTPException(status_code=500, detail="Application not initialized")
     except Exception as e:
-        logger.error(f"خطأ عام في webhook: {e}", exc_info=True)
-        return jsonify({"status": "error"}), 500
+        logger.error(f"خطأ في webhook: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
 
-@app.route('/')
-def index():
-    return "🎬 البوت شغال!"
+@app.get("/")
+async def index():
+    return {"status": "🎬 البوت شغال!"}
 
 # ========== نقطة النشر التلقائي ==========
-@app.route('/publish_now')
-def publish_now():
+@app.get("/publish_now")
+async def publish_now():
     def do_publish():
         try:
             loop = asyncio.new_event_loop()
@@ -440,12 +430,12 @@ def publish_now():
             logger.error(f"خطأ في النشر التلقائي: {e}", exc_info=True)
     
     threading.Thread(target=do_publish).start()
-    return "✅ جاري النشر..."
+    return {"status": "✅ جاري النشر..."}
 
 # ========== تشغيل البوت ==========
-if __name__ == '__main__':
+if __name__ == "__main__":
     register_handlers()
     logger.info("🎬 بوت الأفلام جاهز للتشغيل!")
     logger.info("📱 Bot: @AlZalmMoviesBot")
     logger.info("🚀 جاري تشغيل الخادم...")
-    app.run(host='0.0.0.0', port=10000)
+    uvicorn.run(app, host="0.0.0.0", port=10000)
