@@ -360,11 +360,15 @@ def webhook():
         update_data = request.get_json(force=True)
         update = Update.de_json(update_data, bot)
         if telegram_app:
-            # معالجة التحديث بشكل صحيح
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            loop.run_until_complete(telegram_app.process_update(update))
-            loop.close()
+            # معالجة التحديث بشكل متزامن
+            try:
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                loop.run_until_complete(telegram_app.process_update(update))
+                loop.close()
+            except Exception as e:
+                print(f"خطأ في معالجة التحديث: {e}")
+                return jsonify({"status": "error"}), 500
         return jsonify({"status": "ok"})
     except Exception as e:
         print(f"خطأ في webhook: {e}")
@@ -425,12 +429,8 @@ def publish_now():
 
 # ========== تشغيل البوت ==========
 if __name__ == '__main__':
-    # تسجيل الأوامر
     register_handlers()
     print("🎬 بوت الأفلام جاهز للتشغيل!")
     print("📱 Bot: @AlZalmMoviesBot")
     print("🚀 جاري تشغيل الخادم...")
-    # تشغيل Flask
     app.run(host='0.0.0.0', port=10000)
-if __name__ == "__main__":
-    main()
