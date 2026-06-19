@@ -6,11 +6,10 @@ import aiohttp
 import random
 import threading
 from datetime import datetime
-from fastapi import FastAPI, Request, Response, HTTPException
-from telegram import Update, Bot
+from flask import Flask
+from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 from deep_translator import GoogleTranslator
-import uvicorn
 
 # ========== إعدادات التسجيل ==========
 logging.basicConfig(
@@ -27,10 +26,12 @@ OWNER_ID = 355449817
 
 PUBLISHED_FILE = "published_movies.json"
 
-# ========== إعدادات FastAPI ==========
-app = FastAPI()
-bot = Bot(token=BOT_TOKEN)
-telegram_app = None
+# ========== إعدادات Flask (لمنع خطأ No open ports) ==========
+app = Flask(__name__)
+
+@app.route('/')
+def index():
+    return "🎬 البوت شغال!"
 
 # ========== دوال التخزين ==========
 def load_published_movies():
@@ -353,60 +354,15 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"استخدم الأمر /publish لنشر أول فيلم."
         )
 
-# ========== تهيئة التطبيق ==========
-def init_application():
-    global telegram_app
-    telegram_app = Application.builder().token(BOT_TOKEN).build()
-    telegram_app.add_handler(CommandHandler("start", start))
-    telegram_app.add_handler(CommandHandler("movie", movie))
-    telegram_app.add_handler(CommandHandler("suggest", suggest))
-    telegram_app.add_handler(CommandHandler("publish", publish))
-    telegram_app.add_handler(CommandHandler("stats", stats))
-    # تهيئة التطبيق بشكل متزامن
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    loop.run_until_complete(telegram_app.initialize())
-    loop.close()
-    logger.info("✅ تم تهيئة التطبيق بنجاح")
-
-# ========== نقطة Webhook (باستخدام FastAPI) ==========
-@app.post("/webhook")
-async def webhook(request: Request):
-    try:
-        req_data = await request.json()
-        update = Update.de_json(req_data, bot)
-        if telegram_app:
-            # معالجة التحديث مباشرة (التطبيق مهيأ مسبقاً)
-            try:
-                await telegram_app.process_update(update)
-                return Response(status_code=200)
-            except Exception as e:
-                logger.error(f"خطأ في process_update: {e}", exc_info=True)
-                return Response(status_code=500)
-        else:
-            logger.error("التطبيق لم يتم تهيئته!")
-            return Response(status_code=500)
-    except Exception as e:
-        logger.error(f"خطأ عام في webhook: {e}", exc_info=True)
-        return Response(status_code=500)
-
-@app.get("/")
-async def index():
-    return {"status": "🎬 البوت شغال!"}
-
-@app.get("/test")
-async def test():
-    return {"status": "✅ الخادم يعمل"}
-
-# ========== نقطة النشر التلقائي ==========
-@app.get("/publish_now")
-async def publish_now():
-    def do_publish():
+# ========== مهمة النشر التلقائي ==========
+async def auto_publish():
+    """تنشر فيلم عشوائي في القناة كل ساعة"""
+    while True:
         try:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            movie_data = loop.run_until_complete(get_unpublished_movie())
-            loop.close()
+            await asyncio.sleep(3600)  # ساعة كاملة
+            
+            logger.info("🔄 جاري النشر التلقائي...")
+            movie_data = await get_unpublished_movie()
             
             if movie_data:
                 movie_info = {
@@ -428,10 +384,11 @@ async def publish_now():
                 caption = format_movie_message_arabic(movie_info)
                 poster_url = movie_info.get("poster", "")
                 
+                # نحتاج bot هنا - سنستخدم المتغير العام
                 if poster_url and poster_url != "N/A":
-                    bot.send_photo(chat_id=CHANNEL_ID, photo=poster_url, caption=caption)
+                    await bot.send_photo(chat_id=CHANNEL_ID, photo=poster_url, caption=caption)
                 else:
-                    bot.send_message(chat_id=CHANNEL_ID, text=caption)
+                    await bot.send_message(chat_id=CHANNEL_ID, text=caption)
                 
                 imdb_id = movie_info.get("imdb_id")
                 if imdb_id:
@@ -441,17 +398,44 @@ async def publish_now():
                 logger.info(f"✅ تم النشر التلقائي: {movie_info['title']} (إجمالي: {len(published)})")
             else:
                 logger.warning("❌ ما لقيت فيلم جديد للنشر التلقائي")
+                
         except Exception as e:
-            logger.error(f"خطأ في النشر التلقائي: {e}", exc_info=True)
-    
-    threading.Thread(target=do_publish).start()
-    return {"status": "✅ جاري النشر..."}
+            logger.error(f"❌ خطأ في النشر التلقائي: {e}")
+            await asyncio.sleep(60)
 
 # ========== تشغيل البوت ==========
-if __name__ == "__main__":
-    # تهيئة التطبيق قبل تشغيل الخادم
-    init_application()
+def main():
+    global bot
+    
+    # إنشاء التطبيق
+    application = Application.builder().token(BOT_TOKEN).build()
+    bot = application.bot
+    
+    # تسجيل الأوامر
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("movie", movie))
+    application.add_handler(CommandHandler("suggest", suggest))
+    application.add_handler(CommandHandler("publish", publish))
+    application.add_handler(CommandHandler("stats", stats))
+    
     logger.info("🎬 بوت الأفلام جاهز للتشغيل!")
     logger.info("📱 Bot: @AlZalmMoviesBot")
-    logger.info("🚀 جاري تشغيل الخادم...")
-    uvicorn.run(app, host="0.0.0.0", port=10000)
+    
+    # تشغيل مهمة النشر التلقائي في الخلفية
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    loop.create_task(auto_publish())
+    
+    # تشغيل Flask في thread منفصل عشان نفتح منفذ
+    def run_flask():
+        app.run(host='0.0.0.0', port=10000)
+    
+    flask_thread = threading.Thread(target=run_flask, daemon=True)
+    flask_thread.start()
+    
+    # تشغيل البوت (Polling)
+    logger.info("🚀 جاري تشغيل البوت...")
+    application.run_polling(allowed_updates=Update.ALL_TYPES)
+
+if __name__ == "__main__":
+    main()
