@@ -1,5 +1,6 @@
 import os
 import json
+import asyncio
 import logging
 import aiohttp
 import random
@@ -388,6 +389,7 @@ async def index():
 async def publish_now():
     def do_publish():
         try:
+            # استخدام حلقة حدث جديدة
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
             movie_data = loop.run_until_complete(get_unpublished_movie())
