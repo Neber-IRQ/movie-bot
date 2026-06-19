@@ -1,11 +1,12 @@
+import os
+import json
 import asyncio
 import aiohttp
 import random
-import json
-import os
 from datetime import datetime
-from telegram import Update
-from telegram.ext import Application, CommandHandler, ContextTypes
+from flask import Flask, request, jsonify
+from telegram import Update, Bot
+from telegram.ext import Dispatcher, CommandHandler, CallbackContext
 from deep_translator import GoogleTranslator
 
 # ========== إعدادات البوت ==========
@@ -15,6 +16,11 @@ CHANNEL_ID = "-1001432210812"
 OWNER_ID = 355449817
 
 PUBLISHED_FILE = "published_movies.json"
+
+# ========== إعدادات Flask ==========
+app = Flask(__name__)
+bot = Bot(token=BOT_TOKEN)
+dispatcher = Dispatcher(bot, None, use_context=True)
 
 # ========== دوال التخزين ==========
 def load_published_movies():
@@ -43,7 +49,7 @@ def is_movie_published(imdb_id):
     published = load_published_movies()
     return any(p.get("imdb_id") == imdb_id for p in published)
 
-# ========== دالة جلب معلومات الفيلم ==========
+# ========== دوال جلب المعلومات ==========
 async def get_movie_info(movie_name):
     movie_name = movie_name.strip()
     url = f"https://www.omdbapi.com/?t={movie_name}&apikey={OMDB_API_KEY}&plot=full"
@@ -81,7 +87,6 @@ async def get_movie_info(movie_name):
             print(f"خطأ في جلب الفيلم {movie_name}: {e}")
             return None
 
-# ========== دالة جلب فيلم عشوائي ==========
 async def get_random_movie_from_omdb():
     keywords = [
         "love", "war", "action", "comedy", "drama", "horror", "thriller",
@@ -176,9 +181,9 @@ def format_movie_message_arabic(movie_info):
 """
 
 # ========== أوامر البوت ==========
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def start(update: Update, context: CallbackContext):
     published = load_published_movies()
-    await update.message.reply_text(
+    update.message.reply_text(
         f"🎬 مرحباً! أنا بوت الأفلام\n\n"
         f"📌 الأوامر المتاحة:\n"
         f"/movie اسم_الفيلم - للبحث عن فيلم\n"
@@ -188,24 +193,29 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"📊 عدد الأفلام المنشورة: {len(published)}"
     )
 
-async def movie(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def movie(update: Update, context: CallbackContext):
     user_id = update.effective_user.id
     if user_id != OWNER_ID:
-        await update.message.reply_text("⛔ هذا الأمر للمالك فقط!")
+        update.message.reply_text("⛔ هذا الأمر للمالك فقط!")
         return
     
     text = update.message.text
     parts = text.split(" ", 1)
     if len(parts) < 2:
-        await update.message.reply_text("⚠️ اكتب اسم الفيلم بعد الأمر.\nمثال: /movie Interstellar")
+        update.message.reply_text("⚠️ اكتب اسم الفيلم بعد الأمر.\nمثال: /movie Interstellar")
         return
     
     movie_name = parts[1]
-    loading_msg = await update.message.reply_text(f"🔍 جاري البحث عن: {movie_name}...")
+    loading_msg = update.message.reply_text(f"🔍 جاري البحث عن: {movie_name}...")
     
-    movie_info = await get_movie_info(movie_name)
+    # نجيب معلومات الفيلم (نستخدم asyncio)
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    movie_info = loop.run_until_complete(get_movie_info(movie_name))
+    loop.close()
+    
     if not movie_info:
-        await loading_msg.edit_text(f"❌ ما لقيت فيلم باسم: {movie_name}")
+        loading_msg.edit_text(f"❌ ما لقيت فيلم باسم: {movie_name}")
         return
     
     caption = format_movie_message_arabic(movie_info)
@@ -214,25 +224,29 @@ async def movie(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         if poster_url and poster_url != "N/A":
             short_caption = f"🎬 {movie_info['title']} ({movie_info['year']})"
-            await update.message.reply_photo(photo=poster_url, caption=short_caption)
-            await update.message.reply_text(text=caption)
+            update.message.reply_photo(photo=poster_url, caption=short_caption)
+            update.message.reply_text(text=caption)
         else:
-            await update.message.reply_text(text=caption)
-        await loading_msg.delete()
+            update.message.reply_text(text=caption)
+        loading_msg.delete()
     except Exception as e:
-        await loading_msg.edit_text(f"❌ حدث خطأ: {str(e)}")
+        loading_msg.edit_text(f"❌ حدث خطأ: {str(e)}")
 
-async def suggest(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def suggest(update: Update, context: CallbackContext):
     user_id = update.effective_user.id
     if user_id != OWNER_ID:
-        await update.message.reply_text("⛔ هذا الأمر للمالك فقط!")
+        update.message.reply_text("⛔ هذا الأمر للمالك فقط!")
         return
     
-    loading_msg = await update.message.reply_text("🔍 جاري البحث عن فيلم عشوائي...")
-    movie_data = await get_unpublished_movie()
+    loading_msg = update.message.reply_text("🔍 جاري البحث عن فيلم عشوائي...")
+    
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    movie_data = loop.run_until_complete(get_unpublished_movie())
+    loop.close()
     
     if not movie_data:
-        await loading_msg.edit_text("❌ ما لقيت فيلم جديد! جرب مرة ثانية.")
+        loading_msg.edit_text("❌ ما لقيت فيلم جديد! جرب مرة ثانية.")
         return
     
     movie_info = {
@@ -257,25 +271,29 @@ async def suggest(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         if poster_url and poster_url != "N/A":
             short_caption = f"🎬 {movie_info['title']} ({movie_info['year']})"
-            await update.message.reply_photo(photo=poster_url, caption=short_caption)
-            await update.message.reply_text(text=caption)
+            update.message.reply_photo(photo=poster_url, caption=short_caption)
+            update.message.reply_text(text=caption)
         else:
-            await update.message.reply_text(text=caption)
-        await loading_msg.delete()
+            update.message.reply_text(text=caption)
+        loading_msg.delete()
     except Exception as e:
-        await loading_msg.edit_text(f"❌ حدث خطأ: {str(e)}")
+        loading_msg.edit_text(f"❌ حدث خطأ: {str(e)}")
 
-async def publish(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def publish(update: Update, context: CallbackContext):
     user_id = update.effective_user.id
     if user_id != OWNER_ID:
-        await update.message.reply_text("⛔ هذا الأمر للمالك فقط!")
+        update.message.reply_text("⛔ هذا الأمر للمالك فقط!")
         return
     
-    loading_msg = await update.message.reply_text("🔍 جاري البحث عن فيلم للنشر...")
-    movie_data = await get_unpublished_movie()
+    loading_msg = update.message.reply_text("🔍 جاري البحث عن فيلم للنشر...")
+    
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    movie_data = loop.run_until_complete(get_unpublished_movie())
+    loop.close()
     
     if not movie_data:
-        await loading_msg.edit_text("❌ ما لقيت فيلم جديد! جرب مرة ثانية.")
+        loading_msg.edit_text("❌ ما لقيت فيلم جديد! جرب مرة ثانية.")
         return
     
     movie_info = {
@@ -300,52 +318,74 @@ async def publish(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         if poster_url and poster_url != "N/A":
             short_caption = f"🎬 {movie_info['title']} ({movie_info['year']})"
-            await context.bot.send_photo(chat_id=CHANNEL_ID, photo=poster_url, caption=short_caption)
-            await context.bot.send_message(chat_id=CHANNEL_ID, text=caption)
+            bot.send_photo(chat_id=CHANNEL_ID, photo=poster_url, caption=short_caption)
+            bot.send_message(chat_id=CHANNEL_ID, text=caption)
         else:
-            await context.bot.send_message(chat_id=CHANNEL_ID, text=caption)
+            bot.send_message(chat_id=CHANNEL_ID, text=caption)
         
         imdb_id = movie_info.get("imdb_id")
         if imdb_id:
             save_published_movie(movie_info['title'], imdb_id)
         
         published = load_published_movies()
-        await loading_msg.edit_text(f"✅ تم نشر {movie_info['title']} في القناة!\n📊 عدد الأفلام المنشورة: {len(published)}")
+        loading_msg.edit_text(f"✅ تم نشر {movie_info['title']} في القناة!\n📊 عدد الأفلام المنشورة: {len(published)}")
     except Exception as e:
-        await loading_msg.edit_text(f"❌ حدث خطأ في النشر: {str(e)}")
+        loading_msg.edit_text(f"❌ حدث خطأ في النشر: {str(e)}")
 
-async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def stats(update: Update, context: CallbackContext):
     user_id = update.effective_user.id
     if user_id != OWNER_ID:
-        await update.message.reply_text("⛔ هذا الأمر للمالك فقط!")
+        update.message.reply_text("⛔ هذا الأمر للمالك فقط!")
         return
     
     published = load_published_movies()
     
     if published:
         last_movie = published[-1]
-        await update.message.reply_text(
+        update.message.reply_text(
             f"📊 إحصائيات البوت\n\n"
             f"✅ عدد الأفلام المنشورة: {len(published)}\n"
             f"📝 آخر فيلم تم نشره: {last_movie.get('title', 'غير معروف')}\n"
             f"📆 تاريخ النشر: {last_movie.get('date', 'غير معروف')}"
         )
     else:
-        await update.message.reply_text(
+        update.message.reply_text(
             f"📊 إحصائيات البوت\n\n"
             f"❌ لم يتم نشر أي فيلم حتى الآن!\n"
             f"استخدم الأمر /publish لنشر أول فيلم."
         )
 
-# ========== مهمة النشر التلقائي كل ساعة ==========
-async def auto_publish(bot):
-    while True:
+# ========== تسجيل الأوامر ==========
+dispatcher.add_handler(CommandHandler("start", start))
+dispatcher.add_handler(CommandHandler("movie", movie))
+dispatcher.add_handler(CommandHandler("suggest", suggest))
+dispatcher.add_handler(CommandHandler("publish", publish))
+dispatcher.add_handler(CommandHandler("stats", stats))
+
+# ========== نقطة Webhook ==========
+@app.route('/webhook', methods=['POST'])
+def webhook():
+    try:
+        update = Update.de_json(request.get_json(force=True), bot)
+        dispatcher.process_update(update)
+        return jsonify({"status": "ok"})
+    except Exception as e:
+        print(f"خطأ في webhook: {e}")
+        return jsonify({"status": "error"}), 500
+
+@app.route('/')
+def index():
+    return "🎬 البوت شغال!"
+
+# ========== نقطة النشر التلقائي ==========
+@app.route('/publish_now')
+def publish_now():
+    def do_publish():
         try:
-            await asyncio.sleep(3600)
-            
-            print("🔄 جاري النشر التلقائي...")
-            
-            movie_data = await get_unpublished_movie()
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            movie_data = loop.run_until_complete(get_unpublished_movie())
+            loop.close()
             
             if movie_data:
                 movie_info = {
@@ -368,9 +408,9 @@ async def auto_publish(bot):
                 poster_url = movie_info.get("poster", "")
                 
                 if poster_url and poster_url != "N/A":
-                    await bot.send_photo(chat_id=CHANNEL_ID, photo=poster_url, caption=caption)
+                    bot.send_photo(chat_id=CHANNEL_ID, photo=poster_url, caption=caption)
                 else:
-                    await bot.send_message(chat_id=CHANNEL_ID, text=caption)
+                    bot.send_message(chat_id=CHANNEL_ID, text=caption)
                 
                 imdb_id = movie_info.get("imdb_id")
                 if imdb_id:
@@ -380,37 +420,12 @@ async def auto_publish(bot):
                 print(f"✅ تم النشر التلقائي: {movie_info['title']} (إجمالي: {len(published)})")
             else:
                 print("❌ ما لقيت فيلم جديد للنشر التلقائي")
-                
         except Exception as e:
-            print(f"❌ خطأ في النشر التلقائي: {e}")
-            await asyncio.sleep(60)
+            print(f"خطأ في النشر التلقائي: {e}")
+    
+    import threading
+    threading.Thread(target=do_publish).start()
+    return "✅ جاري النشر..."
 
-# ========== تشغيل البوت ==========
-def main():
-    print("=" * 50)
-    print("🎬 بوت الأفلام جاهز للتشغيل!")
-    print("📱 Bot: @AlZalmMoviesBot")
-    print("=" * 50)
-    print("🚀 جاري تشغيل البوت...")
-    
-    application = Application.builder().token(BOT_TOKEN).build()
-    
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("movie", movie))
-    application.add_handler(CommandHandler("suggest", suggest))
-    application.add_handler(CommandHandler("publish", publish))
-    application.add_handler(CommandHandler("stats", stats))
-    
-    print("✅ البوت شغال! انتظر الأوامر...")
-    print("💡 اكتب /start في البوت")
-    print("⏰ سيبدأ النشر التلقائي بعد ساعة من الآن...")
-    print("-" * 50)
-    
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    loop.create_task(auto_publish(application.bot))
-    
-    application.run_polling(allowed_updates=Update.ALL_TYPES)
-
-if __name__ == "__main__":
-    main()
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=10000)
