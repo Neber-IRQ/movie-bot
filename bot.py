@@ -1,6 +1,7 @@
 import os
 import json
 import asyncio
+import logging
 import aiohttp
 import random
 import threading
@@ -9,6 +10,13 @@ from flask import Flask, request, jsonify
 from telegram import Update, Bot
 from telegram.ext import Application, CommandHandler, ContextTypes
 from deep_translator import GoogleTranslator
+
+# ========== إعدادات التسجيل (لتشخيص الأخطاء) ==========
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
 # ========== إعدادات البوت ==========
 BOT_TOKEN = "8865462282:AAFOQwUBO9eMxhMmLOrBrj5_voIjb4_FgDw"
@@ -85,7 +93,7 @@ async def get_movie_info(movie_name):
                 else:
                     return None
         except Exception as e:
-            print(f"خطأ في جلب الفيلم {movie_name}: {e}")
+            logger.error(f"خطأ في جلب الفيلم {movie_name}: {e}")
             return None
 
 async def get_random_movie_from_omdb():
@@ -124,7 +132,7 @@ async def get_random_movie_from_omdb():
                         if detail_data.get("Response") == "True":
                             return detail_data
         except Exception as e:
-            print(f"خطأ: {e}")
+            logger.error(f"خطأ في جلب فيلم عشوائي: {e}")
             return None
     
     return None
@@ -139,7 +147,7 @@ async def get_unpublished_movie(max_attempts=20):
                     if movie_data.get("Poster") and movie_data.get("Poster") != "N/A":
                         return movie_data
         except Exception as e:
-            print(f"محاولة {attempt+1} فشلت: {e}")
+            logger.warning(f"محاولة {attempt+1} فشلت: {e}")
             continue
     return None
 
@@ -153,6 +161,7 @@ def translate_to_arabic(text):
         else:
             return text
     except Exception as e:
+        logger.error(f"خطأ في الترجمة: {e}")
         return text
 
 def format_movie_message_arabic(movie_info):
@@ -353,25 +362,31 @@ def register_handlers():
     telegram_app.add_handler(CommandHandler("publish", publish))
     telegram_app.add_handler(CommandHandler("stats", stats))
 
-# ========== نقطة Webhook ==========
+# ========== نقطة Webhook (محسنة) ==========
 @app.route('/webhook', methods=['POST'])
 def webhook():
     try:
         update_data = request.get_json(force=True)
         update = Update.de_json(update_data, bot)
         if telegram_app:
-            # معالجة التحديث بشكل متزامن
+            # إنشاء حلقة حدث جديدة لكل طلب
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
             try:
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
+                # تهيئة التطبيق قبل المعالجة (هام جداً)
+                loop.run_until_complete(telegram_app.initialize())
                 loop.run_until_complete(telegram_app.process_update(update))
                 loop.close()
+                return jsonify({"status": "ok"})
             except Exception as e:
-                print(f"خطأ في معالجة التحديث: {e}")
+                logger.error(f"خطأ في معالجة التحديث: {e}", exc_info=True)
+                loop.close()
                 return jsonify({"status": "error"}), 500
-        return jsonify({"status": "ok"})
+        else:
+            logger.error("التطبيق لم يتم تهيئته بعد!")
+            return jsonify({"status": "error"}), 500
     except Exception as e:
-        print(f"خطأ في webhook: {e}")
+        logger.error(f"خطأ عام في webhook: {e}", exc_info=True)
         return jsonify({"status": "error"}), 500
 
 @app.route('/')
@@ -418,11 +433,11 @@ def publish_now():
                     save_published_movie(movie_info['title'], imdb_id)
                 
                 published = load_published_movies()
-                print(f"✅ تم النشر التلقائي: {movie_info['title']} (إجمالي: {len(published)})")
+                logger.info(f"✅ تم النشر التلقائي: {movie_info['title']} (إجمالي: {len(published)})")
             else:
-                print("❌ ما لقيت فيلم جديد للنشر التلقائي")
+                logger.warning("❌ ما لقيت فيلم جديد للنشر التلقائي")
         except Exception as e:
-            print(f"خطأ في النشر التلقائي: {e}")
+            logger.error(f"خطأ في النشر التلقائي: {e}", exc_info=True)
     
     threading.Thread(target=do_publish).start()
     return "✅ جاري النشر..."
@@ -430,7 +445,7 @@ def publish_now():
 # ========== تشغيل البوت ==========
 if __name__ == '__main__':
     register_handlers()
-    print("🎬 بوت الأفلام جاهز للتشغيل!")
-    print("📱 Bot: @AlZalmMoviesBot")
-    print("🚀 جاري تشغيل الخادم...")
+    logger.info("🎬 بوت الأفلام جاهز للتشغيل!")
+    logger.info("📱 Bot: @AlZalmMoviesBot")
+    logger.info("🚀 جاري تشغيل الخادم...")
     app.run(host='0.0.0.0', port=10000)
