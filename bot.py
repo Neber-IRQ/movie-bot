@@ -27,11 +27,15 @@ OWNER_ID = 355449817
 PUBLISHED_FILE = "published_movies.json"
 
 # ========== إعدادات Flask (لمنع خطأ No open ports) ==========
-app = Flask(__name__)
+flask_app = Flask(__name__)
 
-@app.route('/')
+@flask_app.route('/')
 def index():
     return "🎬 البوت شغال!"
+
+@flask_app.route('/health')
+def health():
+    return "OK", 200
 
 # ========== دوال التخزين ==========
 def load_published_movies():
@@ -355,7 +359,7 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
 # ========== مهمة النشر التلقائي ==========
-async def auto_publish():
+async def auto_publish(application):
     """تنشر فيلم عشوائي في القناة كل ساعة"""
     while True:
         try:
@@ -384,11 +388,11 @@ async def auto_publish():
                 caption = format_movie_message_arabic(movie_info)
                 poster_url = movie_info.get("poster", "")
                 
-                # نحتاج bot هنا - سنستخدم المتغير العام
+                # استخدام bot من التطبيق
                 if poster_url and poster_url != "N/A":
-                    await bot.send_photo(chat_id=CHANNEL_ID, photo=poster_url, caption=caption)
+                    await application.bot.send_photo(chat_id=CHANNEL_ID, photo=poster_url, caption=caption)
                 else:
-                    await bot.send_message(chat_id=CHANNEL_ID, text=caption)
+                    await application.bot.send_message(chat_id=CHANNEL_ID, text=caption)
                 
                 imdb_id = movie_info.get("imdb_id")
                 if imdb_id:
@@ -405,11 +409,8 @@ async def auto_publish():
 
 # ========== تشغيل البوت ==========
 def main():
-    global bot
-    
     # إنشاء التطبيق
     application = Application.builder().token(BOT_TOKEN).build()
-    bot = application.bot
     
     # تسجيل الأوامر
     application.add_handler(CommandHandler("start", start))
@@ -421,20 +422,21 @@ def main():
     logger.info("🎬 بوت الأفلام جاهز للتشغيل!")
     logger.info("📱 Bot: @AlZalmMoviesBot")
     
-    # تشغيل مهمة النشر التلقائي في الخلفية
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    loop.create_task(auto_publish())
-    
-    # تشغيل Flask في thread منفصل عشان نفتح منفذ
+    # تشغيل Flask في thread منفصل (لفتح منفذ لـ Render)
     def run_flask():
-        app.run(host='0.0.0.0', port=10000)
+        flask_app.run(host='0.0.0.0', port=10000)
     
     flask_thread = threading.Thread(target=run_flask, daemon=True)
     flask_thread.start()
+    logger.info("✅ خادم Flask شغال على المنفذ 10000")
     
-    # تشغيل البوت (Polling)
-    logger.info("🚀 جاري تشغيل البوت...")
+    # تشغيل مهمة النشر التلقائي في الخلفية (مع تمرير application)
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    loop.create_task(auto_publish(application))
+    
+    # تشغيل البوت (Polling) - هذا يمنع استخدام Webhook
+    logger.info("🚀 جاري تشغيل البوت (Polling)...")
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == "__main__":
