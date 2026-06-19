@@ -1,4 +1,6 @@
 python-telegram-bot==22.8
 aiohttp==3.9.1
 deep-translator==1.11.4
-flask
+fastapi
+uvicorn
+python-multipart
