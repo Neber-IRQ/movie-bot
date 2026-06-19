@@ -28,6 +28,7 @@ PUBLISHED_FILE = "published_movies.json"
 
 # ========== إعدادات Flask (لمنع خطأ No open ports) ==========
 flask_app = Flask(__name__)
+application = None  # سيتم تعيينها لاحقاً
 
 @flask_app.route('/')
 def index():
@@ -359,7 +360,7 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
 # ========== مهمة النشر التلقائي ==========
-async def auto_publish(application):
+async def auto_publish(app):
     """تنشر فيلم عشوائي في القناة كل ساعة"""
     while True:
         try:
@@ -388,11 +389,10 @@ async def auto_publish(application):
                 caption = format_movie_message_arabic(movie_info)
                 poster_url = movie_info.get("poster", "")
                 
-                # استخدام bot من التطبيق
                 if poster_url and poster_url != "N/A":
-                    await application.bot.send_photo(chat_id=CHANNEL_ID, photo=poster_url, caption=caption)
+                    await app.bot.send_photo(chat_id=CHANNEL_ID, photo=poster_url, caption=caption)
                 else:
-                    await application.bot.send_message(chat_id=CHANNEL_ID, text=caption)
+                    await app.bot.send_message(chat_id=CHANNEL_ID, text=caption)
                 
                 imdb_id = movie_info.get("imdb_id")
                 if imdb_id:
@@ -407,8 +407,64 @@ async def auto_publish(application):
             logger.error(f"❌ خطأ في النشر التلقائي: {e}")
             await asyncio.sleep(60)
 
+# ========== نقطة النشر التلقائي (لـ cron-job.org) ==========
+@flask_app.route('/publish_now')
+def publish_now():
+    def do_publish():
+        try:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            movie_data = loop.run_until_complete(get_unpublished_movie())
+            loop.close()
+            
+            if movie_data:
+                movie_info = {
+                    "title": movie_data.get("Title", "غير معروف"),
+                    "year": movie_data.get("Year", "غير معروف"),
+                    "rated": movie_data.get("Rated", "غير معروف"),
+                    "released": movie_data.get("Released", "غير معروف"),
+                    "runtime": movie_data.get("Runtime", "غير معروف"),
+                    "genre": movie_data.get("Genre", "غير معروف"),
+                    "director": movie_data.get("Director", "غير معروف"),
+                    "writer": movie_data.get("Writer", "غير معروف"),
+                    "actors": movie_data.get("Actors", "غير معروف"),
+                    "plot": movie_data.get("Plot", "غير معروف"),
+                    "imdb_rating": movie_data.get("imdbRating", "غير معروف"),
+                    "poster": movie_data.get("Poster", ""),
+                    "imdb_id": movie_data.get("imdbID", "")
+                }
+                
+                caption = format_movie_message_arabic(movie_info)
+                poster_url = movie_info.get("poster", "")
+                
+                # استخدام bot من التطبيق العام
+                if application is not None:
+                    bot = application.bot
+                    if poster_url and poster_url != "N/A":
+                        bot.send_photo(chat_id=CHANNEL_ID, photo=poster_url, caption=caption)
+                    else:
+                        bot.send_message(chat_id=CHANNEL_ID, text=caption)
+                    
+                    imdb_id = movie_info.get("imdb_id")
+                    if imdb_id:
+                        save_published_movie(movie_info['title'], imdb_id)
+                    
+                    published = load_published_movies()
+                    logger.info(f"✅ تم النشر التلقائي: {movie_info['title']} (إجمالي: {len(published)})")
+                else:
+                    logger.error("❌ التطبيق لم يتم تهيئته بعد!")
+            else:
+                logger.warning("❌ ما لقيت فيلم جديد للنشر التلقائي")
+        except Exception as e:
+            logger.error(f"خطأ في النشر التلقائي: {e}", exc_info=True)
+    
+    threading.Thread(target=do_publish).start()
+    return "✅ جاري النشر..."
+
 # ========== تشغيل البوت ==========
 def main():
+    global application
+    
     # إنشاء التطبيق
     application = Application.builder().token(BOT_TOKEN).build()
     
