@@ -353,8 +353,8 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"استخدم الأمر /publish لنشر أول فيلم."
         )
 
-# ========== تسجيل الأوامر ==========
-def register_handlers():
+# ========== تهيئة التطبيق ==========
+def init_application():
     global telegram_app
     telegram_app = Application.builder().token(BOT_TOKEN).build()
     telegram_app.add_handler(CommandHandler("start", start))
@@ -362,6 +362,12 @@ def register_handlers():
     telegram_app.add_handler(CommandHandler("suggest", suggest))
     telegram_app.add_handler(CommandHandler("publish", publish))
     telegram_app.add_handler(CommandHandler("stats", stats))
+    # تهيئة التطبيق بشكل متزامن
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    loop.run_until_complete(telegram_app.initialize())
+    loop.close()
+    logger.info("✅ تم تهيئة التطبيق بنجاح")
 
 # ========== نقطة Webhook (باستخدام FastAPI) ==========
 @app.post("/webhook")
@@ -370,26 +376,33 @@ async def webhook(request: Request):
         req_data = await request.json()
         update = Update.de_json(req_data, bot)
         if telegram_app:
-            await telegram_app.initialize()
-            await telegram_app.process_update(update)
-            return Response(status_code=200)
+            # معالجة التحديث مباشرة (التطبيق مهيأ مسبقاً)
+            try:
+                await telegram_app.process_update(update)
+                return Response(status_code=200)
+            except Exception as e:
+                logger.error(f"خطأ في process_update: {e}", exc_info=True)
+                return Response(status_code=500)
         else:
-            logger.error("التطبيق لم يتم تهيئته بعد!")
-            raise HTTPException(status_code=500, detail="Application not initialized")
+            logger.error("التطبيق لم يتم تهيئته!")
+            return Response(status_code=500)
     except Exception as e:
-        logger.error(f"خطأ في webhook: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"خطأ عام في webhook: {e}", exc_info=True)
+        return Response(status_code=500)
 
 @app.get("/")
 async def index():
     return {"status": "🎬 البوت شغال!"}
+
+@app.get("/test")
+async def test():
+    return {"status": "✅ الخادم يعمل"}
 
 # ========== نقطة النشر التلقائي ==========
 @app.get("/publish_now")
 async def publish_now():
     def do_publish():
         try:
-            # استخدام حلقة حدث جديدة
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
             movie_data = loop.run_until_complete(get_unpublished_movie())
@@ -436,7 +449,8 @@ async def publish_now():
 
 # ========== تشغيل البوت ==========
 if __name__ == "__main__":
-    register_handlers()
+    # تهيئة التطبيق قبل تشغيل الخادم
+    init_application()
     logger.info("🎬 بوت الأفلام جاهز للتشغيل!")
     logger.info("📱 Bot: @AlZalmMoviesBot")
     logger.info("🚀 جاري تشغيل الخادم...")
