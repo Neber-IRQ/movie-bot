@@ -3,6 +3,7 @@ import json
 import asyncio
 import aiohttp
 import random
+import threading
 from datetime import datetime
 from flask import Flask, request, jsonify
 from telegram import Update, Bot
@@ -20,7 +21,7 @@ PUBLISHED_FILE = "published_movies.json"
 # ========== إعدادات Flask ==========
 app = Flask(__name__)
 bot = Bot(token=BOT_TOKEN)
-application = None  # سيتم تعيينها لاحقاً
+telegram_app = None
 
 # ========== دوال التخزين ==========
 def load_published_movies():
@@ -344,13 +345,13 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ========== تسجيل الأوامر ==========
 def register_handlers():
-    global application
-    application = Application.builder().token(BOT_TOKEN).build()
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("movie", movie))
-    application.add_handler(CommandHandler("suggest", suggest))
-    application.add_handler(CommandHandler("publish", publish))
-    application.add_handler(CommandHandler("stats", stats))
+    global telegram_app
+    telegram_app = Application.builder().token(BOT_TOKEN).build()
+    telegram_app.add_handler(CommandHandler("start", start))
+    telegram_app.add_handler(CommandHandler("movie", movie))
+    telegram_app.add_handler(CommandHandler("suggest", suggest))
+    telegram_app.add_handler(CommandHandler("publish", publish))
+    telegram_app.add_handler(CommandHandler("stats", stats))
 
 # ========== نقطة Webhook ==========
 @app.route('/webhook', methods=['POST'])
@@ -358,8 +359,12 @@ def webhook():
     try:
         update_data = request.get_json(force=True)
         update = Update.de_json(update_data, bot)
-        if application:
-            asyncio.run(application.process_update(update))
+        if telegram_app:
+            # معالجة التحديث بشكل صحيح
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            loop.run_until_complete(telegram_app.process_update(update))
+            loop.close()
         return jsonify({"status": "ok"})
     except Exception as e:
         print(f"خطأ في webhook: {e}")
@@ -415,15 +420,17 @@ def publish_now():
         except Exception as e:
             print(f"خطأ في النشر التلقائي: {e}")
     
-    import threading
     threading.Thread(target=do_publish).start()
     return "✅ جاري النشر..."
 
+# ========== تشغيل البوت ==========
 if __name__ == '__main__':
-    # تسجيل الأوامر قبل تشغيل الخادم
+    # تسجيل الأوامر
     register_handlers()
-    # تشغيل خادم Flask على المنفذ 10000 كما تطلبه Render
+    print("🎬 بوت الأفلام جاهز للتشغيل!")
+    print("📱 Bot: @AlZalmMoviesBot")
+    print("🚀 جاري تشغيل الخادم...")
+    # تشغيل Flask
     app.run(host='0.0.0.0', port=10000)
-
 if __name__ == "__main__":
     main()
