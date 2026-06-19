@@ -361,10 +361,9 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ========== مهمة النشر التلقائي ==========
 async def auto_publish(app):
-    """تنشر فيلم عشوائي في القناة كل ساعة"""
     while True:
         try:
-            await asyncio.sleep(3600)  # ساعة كاملة
+            await asyncio.sleep(3600)
             
             logger.info("🔄 جاري النشر التلقائي...")
             movie_data = await get_unpublished_movie()
@@ -417,7 +416,7 @@ def publish_now():
             movie_data = loop.run_until_complete(get_unpublished_movie())
             loop.close()
             
-            if movie_data:
+            if movie_data and application is not None:
                 movie_info = {
                     "title": movie_data.get("Title", "غير معروف"),
                     "year": movie_data.get("Year", "غير معروف"),
@@ -437,22 +436,18 @@ def publish_now():
                 caption = format_movie_message_arabic(movie_info)
                 poster_url = movie_info.get("poster", "")
                 
-                # استخدام bot من التطبيق العام
-                if application is not None:
-                    bot = application.bot
-                    if poster_url and poster_url != "N/A":
-                        bot.send_photo(chat_id=CHANNEL_ID, photo=poster_url, caption=caption)
-                    else:
-                        bot.send_message(chat_id=CHANNEL_ID, text=caption)
-                    
-                    imdb_id = movie_info.get("imdb_id")
-                    if imdb_id:
-                        save_published_movie(movie_info['title'], imdb_id)
-                    
-                    published = load_published_movies()
-                    logger.info(f"✅ تم النشر التلقائي: {movie_info['title']} (إجمالي: {len(published)})")
+                bot = application.bot
+                if poster_url and poster_url != "N/A":
+                    bot.send_photo(chat_id=CHANNEL_ID, photo=poster_url, caption=caption)
                 else:
-                    logger.error("❌ التطبيق لم يتم تهيئته بعد!")
+                    bot.send_message(chat_id=CHANNEL_ID, text=caption)
+                
+                imdb_id = movie_info.get("imdb_id")
+                if imdb_id:
+                    save_published_movie(movie_info['title'], imdb_id)
+                
+                published = load_published_movies()
+                logger.info(f"✅ تم النشر التلقائي: {movie_info['title']} (إجمالي: {len(published)})")
             else:
                 logger.warning("❌ ما لقيت فيلم جديد للنشر التلقائي")
         except Exception as e:
@@ -465,10 +460,8 @@ def publish_now():
 def main():
     global application
     
-    # إنشاء التطبيق
     application = Application.builder().token(BOT_TOKEN).build()
     
-    # تسجيل الأوامر
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("movie", movie))
     application.add_handler(CommandHandler("suggest", suggest))
@@ -478,7 +471,6 @@ def main():
     logger.info("🎬 بوت الأفلام جاهز للتشغيل!")
     logger.info("📱 Bot: @AlZalmMoviesBot")
     
-    # تشغيل Flask في thread منفصل (لفتح منفذ لـ Render)
     def run_flask():
         flask_app.run(host='0.0.0.0', port=10000)
     
@@ -486,12 +478,10 @@ def main():
     flask_thread.start()
     logger.info("✅ خادم Flask شغال على المنفذ 10000")
     
-    # تشغيل مهمة النشر التلقائي في الخلفية (مع تمرير application)
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     loop.create_task(auto_publish(application))
     
-    # تشغيل البوت (Polling) - هذا يمنع استخدام Webhook
     logger.info("🚀 جاري تشغيل البوت (Polling)...")
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 
