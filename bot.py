@@ -363,7 +363,7 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def auto_publish(app):
     while True:
         try:
-            await asyncio.sleep(3600)
+            await asyncio.sleep(10800)
             
             logger.info("🔄 جاري النشر التلقائي...")
             movie_data = await get_unpublished_movie()
