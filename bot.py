@@ -189,7 +189,7 @@ def translate_with_ai(text, context_type="plot"):
             )
 
         response = groq_client.chat.completions.create(
-            model="openai/gpt-oss-120b",
+            model="openai/gpt-oss-120b",   # ← الموديل الجديد
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": text}
@@ -204,7 +204,7 @@ def translate_with_ai(text, context_type="plot"):
 
     except Exception as e:
         logger.error(f"❌ فشلت الترجمة بـ Groq: {e}")
-        return text  # نرجع النص الأصلي عند الفشل
+        return textنرجع النص الأصلي عند الفشل
 
 def format_movie_message_arabic(movie_info):
     if not movie_info:
