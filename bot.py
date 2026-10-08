@@ -9,7 +9,7 @@ from datetime import datetime
 from flask import Flask
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
-from deep_translator import GoogleTranslator
+from groq import Groq
 
 # ========== إعدادات التسجيل ==========
 logging.basicConfig(
@@ -23,12 +23,16 @@ BOT_TOKEN = "8865462282:AAFOQwUBO9eMxhMmLOrBrj5_voIjb4_FgDw"
 OMDB_API_KEY = "72c327f4"
 CHANNEL_ID = "-1001432210812"
 OWNER_ID = 355449817
+GROQ_API_KEY = "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"
 
 PUBLISHED_FILE = "published_movies.json"
 
-# ========== إعدادات Flask (لمنع خطأ No open ports) ==========
+# ========== إعدادات Groq ==========
+groq_client = Groq(api_key=GROQ_API_KEY)
+
+# ========== إعدادات Flask ==========
 flask_app = Flask(__name__)
-application = None  # سيتم تعيينها لاحقاً
+application = None
 
 @flask_app.route('/')
 def index():
@@ -69,18 +73,18 @@ def is_movie_published(imdb_id):
 async def get_movie_info(movie_name):
     movie_name = movie_name.strip()
     url = f"https://www.omdbapi.com/?t={movie_name}&apikey={OMDB_API_KEY}&plot=full"
-    
+
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
     }
-    
+
     async with aiohttp.ClientSession() as session:
         try:
             async with session.get(url, headers=headers, timeout=15) as response:
                 if response.status != 200:
                     return None
                 data = await response.json()
-                
+
                 if data.get("Response") == "True":
                     return {
                         "title": data.get("Title", "غير معروف"),
@@ -110,38 +114,38 @@ async def get_random_movie_from_omdb():
         "family", "animation", "musical", "western", "sports", "history",
         "dream", "star", "moon", "sun", "life", "death", "time", "space"
     ]
-    
+
     keyword = random.choice(keywords)
     url = f"https://www.omdbapi.com/?s={keyword}&type=movie&apikey={OMDB_API_KEY}&page={random.randint(1, 5)}"
-    
+
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
     }
-    
+
     async with aiohttp.ClientSession() as session:
         try:
             async with session.get(url, headers=headers, timeout=15) as response:
                 if response.status != 200:
                     return None
                 data = await response.json()
-                
+
                 if data.get("Response") == "True" and data.get("Search"):
                     movies = data["Search"]
                     random_movie = random.choice(movies)
                     movie_id = random_movie.get("imdbID")
                     detail_url = f"https://www.omdbapi.com/?i={movie_id}&apikey={OMDB_API_KEY}&plot=full"
-                    
+
                     async with session.get(detail_url, headers=headers, timeout=15) as detail_response:
                         if detail_response.status != 200:
                             return None
                         detail_data = await detail_response.json()
-                        
+
                         if detail_data.get("Response") == "True":
                             return detail_data
         except Exception as e:
             logger.error(f"خطأ في جلب فيلم عشوائي: {e}")
             return None
-    
+
     return None
 
 async def get_unpublished_movie(max_attempts=20):
@@ -158,27 +162,58 @@ async def get_unpublished_movie(max_attempts=20):
             continue
     return None
 
-# ========== دالة الترجمة ==========
-translator = GoogleTranslator(source='en', target='ar')
-
-def translate_to_arabic(text):
-    try:
-        if text and text != "غير معروف" and text != "N/A":
-            return translator.translate(text[:500])
-        else:
-            return text
-    except Exception as e:
-        logger.error(f"خطأ في الترجمة: {e}")
+# ========== دالة الترجمة بالذكاء الاصطناعي (Groq) ==========
+def translate_with_ai(text, context_type="plot"):
+    """ترجمة النص باستخدام Groq AI مع الحفاظ على الأسلوب والسياق"""
+    if not text or text in ["غير معروف", "N/A", ""]:
         return text
+
+    try:
+        # نحدد نوع الترجمة حسب السياق
+        if context_type == "plot":
+            system_prompt = (
+                "أنت مترجم سينمائي محترف. ترجم قصة الفيلم التالية إلى العربية الفصحى بأسلوب مشوق وجذاب، "
+                "كما يفعل النقاد السينمائيون العرب. اجعل الترجمة مفهومة وسلسة، وحافظ على روح النص الأصلي. "
+                "اكتب الترجمة فقط بدون أي مقدمات أو شرح."
+            )
+        elif context_type == "genre":
+            system_prompt = (
+                "أنت مترجم محترف. ترجم أنواع الأفلام التالية إلى العربية. "
+                "مثال: Action → أكشن، Drama → دراما، Sci-Fi → خيال علمي. "
+                "اكتب الترجمة فقط بدون أي إضافات."
+            )
+        else:
+            system_prompt = (
+                "أنت مترجم محترف. ترجم النص التالي إلى العربية الفصحى بأسلوب واضح ومفهوم. "
+                "اكتب الترجمة فقط بدون أي مقدمات."
+            )
+
+        response = groq_client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": text}
+            ],
+            temperature=0.3,
+            max_tokens=1024,
+        )
+
+        translated = response.choices[0].message.content.strip()
+        logger.info(f"✅ تمت الترجمة بـ Groq AI ({context_type}): {translated[:60]}...")
+        return translated
+
+    except Exception as e:
+        logger.error(f"❌ فشلت الترجمة بـ Groq: {e}")
+        return text  # نرجع النص الأصلي عند الفشل
 
 def format_movie_message_arabic(movie_info):
     if not movie_info:
         return "❌ الفيلم غير موجود!"
-    
+
     plot_text = movie_info['plot']
-    plot_arabic = translate_to_arabic(plot_text)
-    genre_arabic = translate_to_arabic(movie_info['genre'])
-    
+    plot_arabic = translate_with_ai(plot_text, "plot")
+    genre_arabic = translate_with_ai(movie_info['genre'], "genre")
+
     return f"""
 🎬 {movie_info['title']} ({movie_info['year']})
 
@@ -191,7 +226,7 @@ def format_movie_message_arabic(movie_info):
 📆 تاريخ الإصدار: {movie_info['released']}
 🔞 التصنيف العمري: {movie_info['rated']}
 
-📝 القصة (بالعربية):
+📝 القصة:
 {plot_arabic}
 
 🔗 IMDb: https://www.imdb.com/title/{movie_info['imdb_id']}/
@@ -215,24 +250,24 @@ async def movie(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if user_id != OWNER_ID:
         await update.message.reply_text("⛔ هذا الأمر للمالك فقط!")
         return
-    
+
     text = update.message.text
     parts = text.split(" ", 1)
     if len(parts) < 2:
         await update.message.reply_text("⚠️ اكتب اسم الفيلم بعد الأمر.\nمثال: /movie Interstellar")
         return
-    
+
     movie_name = parts[1]
     loading_msg = await update.message.reply_text(f"🔍 جاري البحث عن: {movie_name}...")
-    
+
     movie_info = await get_movie_info(movie_name)
     if not movie_info:
         await loading_msg.edit_text(f"❌ ما لقيت فيلم باسم: {movie_name}")
         return
-    
+
     caption = format_movie_message_arabic(movie_info)
     poster_url = movie_info.get("poster", "")
-    
+
     try:
         if poster_url and poster_url != "N/A":
             short_caption = f"🎬 {movie_info['title']} ({movie_info['year']})"
@@ -249,14 +284,14 @@ async def suggest(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if user_id != OWNER_ID:
         await update.message.reply_text("⛔ هذا الأمر للمالك فقط!")
         return
-    
+
     loading_msg = await update.message.reply_text("🔍 جاري البحث عن فيلم عشوائي...")
     movie_data = await get_unpublished_movie()
-    
+
     if not movie_data:
         await loading_msg.edit_text("❌ ما لقيت فيلم جديد! جرب مرة ثانية.")
         return
-    
+
     movie_info = {
         "title": movie_data.get("Title", "غير معروف"),
         "year": movie_data.get("Year", "غير معروف"),
@@ -272,10 +307,10 @@ async def suggest(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "poster": movie_data.get("Poster", ""),
         "imdb_id": movie_data.get("imdbID", "")
     }
-    
+
     caption = format_movie_message_arabic(movie_info)
     poster_url = movie_info.get("poster", "")
-    
+
     try:
         if poster_url and poster_url != "N/A":
             short_caption = f"🎬 {movie_info['title']} ({movie_info['year']})"
@@ -292,14 +327,14 @@ async def publish(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if user_id != OWNER_ID:
         await update.message.reply_text("⛔ هذا الأمر للمالك فقط!")
         return
-    
+
     loading_msg = await update.message.reply_text("🔍 جاري البحث عن فيلم للنشر...")
     movie_data = await get_unpublished_movie()
-    
+
     if not movie_data:
         await loading_msg.edit_text("❌ ما لقيت فيلم جديد! جرب مرة ثانية.")
         return
-    
+
     movie_info = {
         "title": movie_data.get("Title", "غير معروف"),
         "year": movie_data.get("Year", "غير معروف"),
@@ -315,10 +350,10 @@ async def publish(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "poster": movie_data.get("Poster", ""),
         "imdb_id": movie_data.get("imdbID", "")
     }
-    
+
     caption = format_movie_message_arabic(movie_info)
     poster_url = movie_info.get("poster", "")
-    
+
     try:
         if poster_url and poster_url != "N/A":
             short_caption = f"🎬 {movie_info['title']} ({movie_info['year']})"
@@ -326,11 +361,11 @@ async def publish(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await context.bot.send_message(chat_id=CHANNEL_ID, text=caption)
         else:
             await context.bot.send_message(chat_id=CHANNEL_ID, text=caption)
-        
+
         imdb_id = movie_info.get("imdb_id")
         if imdb_id:
             save_published_movie(movie_info['title'], imdb_id)
-        
+
         published = load_published_movies()
         await loading_msg.edit_text(f"✅ تم نشر {movie_info['title']} في القناة!\n📊 عدد الأفلام المنشورة: {len(published)}")
     except Exception as e:
@@ -341,9 +376,9 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if user_id != OWNER_ID:
         await update.message.reply_text("⛔ هذا الأمر للمالك فقط!")
         return
-    
+
     published = load_published_movies()
-    
+
     if published:
         last_movie = published[-1]
         await update.message.reply_text(
@@ -363,11 +398,11 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def auto_publish(app):
     while True:
         try:
-            await asyncio.sleep(10800)
-            
+            await asyncio.sleep(10800)  # 3 ساعات
+
             logger.info("🔄 جاري النشر التلقائي...")
             movie_data = await get_unpublished_movie()
-            
+
             if movie_data:
                 movie_info = {
                     "title": movie_data.get("Title", "غير معروف"),
@@ -384,24 +419,24 @@ async def auto_publish(app):
                     "poster": movie_data.get("Poster", ""),
                     "imdb_id": movie_data.get("imdbID", "")
                 }
-                
+
                 caption = format_movie_message_arabic(movie_info)
                 poster_url = movie_info.get("poster", "")
-                
+
                 if poster_url and poster_url != "N/A":
                     await app.bot.send_photo(chat_id=CHANNEL_ID, photo=poster_url, caption=caption)
                 else:
                     await app.bot.send_message(chat_id=CHANNEL_ID, text=caption)
-                
+
                 imdb_id = movie_info.get("imdb_id")
                 if imdb_id:
                     save_published_movie(movie_info['title'], imdb_id)
-                
+
                 published = load_published_movies()
                 logger.info(f"✅ تم النشر التلقائي: {movie_info['title']} (إجمالي: {len(published)})")
             else:
                 logger.warning("❌ ما لقيت فيلم جديد للنشر التلقائي")
-                
+
         except Exception as e:
             logger.error(f"❌ خطأ في النشر التلقائي: {e}")
             await asyncio.sleep(60)
@@ -415,7 +450,7 @@ def publish_now():
             asyncio.set_event_loop(loop)
             movie_data = loop.run_until_complete(get_unpublished_movie())
             loop.close()
-            
+
             if movie_data and application is not None:
                 movie_info = {
                     "title": movie_data.get("Title", "غير معروف"),
@@ -432,56 +467,56 @@ def publish_now():
                     "poster": movie_data.get("Poster", ""),
                     "imdb_id": movie_data.get("imdbID", "")
                 }
-                
+
                 caption = format_movie_message_arabic(movie_info)
                 poster_url = movie_info.get("poster", "")
-                
+
                 bot = application.bot
                 if poster_url and poster_url != "N/A":
                     bot.send_photo(chat_id=CHANNEL_ID, photo=poster_url, caption=caption)
                 else:
                     bot.send_message(chat_id=CHANNEL_ID, text=caption)
-                
+
                 imdb_id = movie_info.get("imdb_id")
                 if imdb_id:
                     save_published_movie(movie_info['title'], imdb_id)
-                
+
                 published = load_published_movies()
                 logger.info(f"✅ تم النشر التلقائي: {movie_info['title']} (إجمالي: {len(published)})")
             else:
                 logger.warning("❌ ما لقيت فيلم جديد للنشر التلقائي")
         except Exception as e:
             logger.error(f"خطأ في النشر التلقائي: {e}", exc_info=True)
-    
+
     threading.Thread(target=do_publish).start()
     return "✅ جاري النشر..."
 
 # ========== تشغيل البوت ==========
 def main():
     global application
-    
+
     application = Application.builder().token(BOT_TOKEN).build()
-    
+
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("movie", movie))
     application.add_handler(CommandHandler("suggest", suggest))
     application.add_handler(CommandHandler("publish", publish))
     application.add_handler(CommandHandler("stats", stats))
-    
+
     logger.info("🎬 بوت الأفلام جاهز للتشغيل!")
     logger.info("📱 Bot: @AlZalmMoviesBot")
-    
+
     def run_flask():
         flask_app.run(host='0.0.0.0', port=10000)
-    
+
     flask_thread = threading.Thread(target=run_flask, daemon=True)
     flask_thread.start()
     logger.info("✅ خادم Flask شغال على المنفذ 10000")
-    
+
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     loop.create_task(auto_publish(application))
-    
+
     logger.info("🚀 جاري تشغيل البوت (Polling)...")
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 
