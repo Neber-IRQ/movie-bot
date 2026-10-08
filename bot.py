@@ -23,7 +23,7 @@ BOT_TOKEN = "8865462282:AAFOQwUBO9eMxhMmLOrBrj5_voIjb4_FgDw"
 OMDB_API_KEY = "72c327f4"
 CHANNEL_ID = "-1001432210812"
 OWNER_ID = 355449817
-GROQ_API_KEY = "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"
+GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "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")
 
 PUBLISHED_FILE = "published_movies.json"
 
@@ -36,7 +36,7 @@ application = None
 
 @flask_app.route('/')
 def index():
-    return "🎬 البوت شغال!"
+    return "Bot is running!"
 
 @flask_app.route('/health')
 def health():
@@ -73,18 +73,15 @@ def is_movie_published(imdb_id):
 async def get_movie_info(movie_name):
     movie_name = movie_name.strip()
     url = f"https://www.omdbapi.com/?t={movie_name}&apikey={OMDB_API_KEY}&plot=full"
-
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
     }
-
     async with aiohttp.ClientSession() as session:
         try:
             async with session.get(url, headers=headers, timeout=15) as response:
                 if response.status != 200:
                     return None
                 data = await response.json()
-
                 if data.get("Response") == "True":
                     return {
                         "title": data.get("Title", "غير معروف"),
@@ -104,7 +101,7 @@ async def get_movie_info(movie_name):
                 else:
                     return None
         except Exception as e:
-            logger.error(f"خطأ في جلب الفيلم {movie_name}: {e}")
+            logger.error(f"Error fetching movie {movie_name}: {e}")
             return None
 
 async def get_random_movie_from_omdb():
@@ -114,38 +111,31 @@ async def get_random_movie_from_omdb():
         "family", "animation", "musical", "western", "sports", "history",
         "dream", "star", "moon", "sun", "life", "death", "time", "space"
     ]
-
     keyword = random.choice(keywords)
     url = f"https://www.omdbapi.com/?s={keyword}&type=movie&apikey={OMDB_API_KEY}&page={random.randint(1, 5)}"
-
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
     }
-
     async with aiohttp.ClientSession() as session:
         try:
             async with session.get(url, headers=headers, timeout=15) as response:
                 if response.status != 200:
                     return None
                 data = await response.json()
-
                 if data.get("Response") == "True" and data.get("Search"):
                     movies = data["Search"]
                     random_movie = random.choice(movies)
                     movie_id = random_movie.get("imdbID")
                     detail_url = f"https://www.omdbapi.com/?i={movie_id}&apikey={OMDB_API_KEY}&plot=full"
-
                     async with session.get(detail_url, headers=headers, timeout=15) as detail_response:
                         if detail_response.status != 200:
                             return None
                         detail_data = await detail_response.json()
-
                         if detail_data.get("Response") == "True":
                             return detail_data
         except Exception as e:
-            logger.error(f"خطأ في جلب فيلم عشوائي: {e}")
+            logger.error(f"Error fetching random movie: {e}")
             return None
-
     return None
 
 async def get_unpublished_movie(max_attempts=20):
@@ -158,7 +148,7 @@ async def get_unpublished_movie(max_attempts=20):
                     if movie_data.get("Poster") and movie_data.get("Poster") != "N/A":
                         return movie_data
         except Exception as e:
-            logger.warning(f"محاولة {attempt+1} فشلت: {e}")
+            logger.warning(f"Attempt {attempt+1} failed: {e}")
             continue
     return None
 
@@ -169,12 +159,12 @@ def translate_with_ai(text, context_type="plot"):
 
     try:
         if context_type == "plot":
-  system_prompt = (
-    "أنت مترجم سينمائي محترف. ترجم قصة الفيلم التالية إلى العربية الفصحى بأسلوب مشوق وجذاب، "
-    "كما يفعل النقاد السينمائيون العرب. اجعل الترجمة مفهومة وسلسة، وحافظ على روح النص الأصلي. "
-    "تأكد من أن جميع الكلمات بالعربية الفصحى فقط، ولا تستخدم أي كلمات أجنبية. "
-    "اكتب الترجمة فقط بدون أي مقدمات أو شرح."
-)
+            system_prompt = (
+                "أنت مترجم سينمائي محترف. ترجم قصة الفيلم التالية إلى العربية الفصحى بأسلوب مشوق وجذاب. "
+                "اجعل الترجمة مفهومة وسلسة، وحافظ على روح النص الأصلي. "
+                "تأكد من أن جميع الكلمات بالعربية الفصحى فقط. "
+                "اكتب الترجمة فقط بدون أي مقدمات أو شرح."
+            )
         elif context_type == "genre":
             system_prompt = (
                 "أنت مترجم محترف. ترجم أنواع الأفلام التالية إلى العربية. "
@@ -198,11 +188,11 @@ def translate_with_ai(text, context_type="plot"):
         )
 
         translated = response.choices[0].message.content.strip()
-        logger.info(f"تمت الترجمة بنجاح ({context_type}): {translated[:60]}...")
+        logger.info(f"Translation successful ({context_type}): {translated[:60]}...")
         return translated
 
     except Exception as e:
-        logger.error(f"فشلت الترجمة: {e}")
+        logger.error(f"Translation failed: {e}")
         return text
 
 def format_movie_message_arabic(movie_info):
@@ -399,7 +389,7 @@ async def auto_publish(app):
         try:
             await asyncio.sleep(10800)
 
-            logger.info("جاري النشر التلقائي...")
+            logger.info("Auto-publishing...")
             movie_data = await get_unpublished_movie()
 
             if movie_data:
@@ -432,12 +422,12 @@ async def auto_publish(app):
                     save_published_movie(movie_info['title'], imdb_id)
 
                 published = load_published_movies()
-                logger.info(f"تم النشر التلقائي: {movie_info['title']} (إجمالي: {len(published)})")
+                logger.info(f"Auto-published: {movie_info['title']} (total: {len(published)})")
             else:
-                logger.warning("ما لقيت فيلم جديد للنشر التلقائي")
+                logger.warning("No new movie found for auto-publish")
 
         except Exception as e:
-            logger.error(f"خطأ في النشر التلقائي: {e}")
+            logger.error(f"Auto-publish error: {e}")
             await asyncio.sleep(60)
 
 # ========== نقطة النشر التلقائي ==========
@@ -481,14 +471,14 @@ def publish_now():
                     save_published_movie(movie_info['title'], imdb_id)
 
                 published = load_published_movies()
-                logger.info(f"تم النشر التلقائي: {movie_info['title']} (إجمالي: {len(published)})")
+                logger.info(f"Auto-published: {movie_info['title']} (total: {len(published)})")
             else:
-                logger.warning("ما لقيت فيلم جديد للنشر التلقائي")
+                logger.warning("No new movie found for auto-publish")
         except Exception as e:
-            logger.error(f"خطأ في النشر التلقائي: {e}", exc_info=True)
+            logger.error(f"Auto-publish error: {e}", exc_info=True)
 
     threading.Thread(target=do_publish).start()
-    return "جاري النشر..."
+    return "Publishing..."
 
 # ========== تشغيل البوت ==========
 def main():
@@ -502,7 +492,7 @@ def main():
     application.add_handler(CommandHandler("publish", publish))
     application.add_handler(CommandHandler("stats", stats))
 
-    logger.info("بوت الأفلام جاهز للتشغيل!")
+    logger.info("Bot is starting...")
     logger.info("Bot: @AlZalmMoviesBot")
 
     def run_flask():
@@ -510,13 +500,13 @@ def main():
 
     flask_thread = threading.Thread(target=run_flask, daemon=True)
     flask_thread.start()
-    logger.info("خادم Flask شغال على المنفذ 10000")
+    logger.info("Flask server running on port 10000")
 
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     loop.create_task(auto_publish(application))
 
-    logger.info("جاري تشغيل البوت (Polling)...")
+    logger.info("Starting bot (Polling)...")
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == "__main__":
