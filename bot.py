@@ -30,7 +30,7 @@ GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
 PUBLISHED_FILE = "published_movies.json"
 
 # ========== إعدادات Groq ==========
-groq_client = Groq(api_key=GROQ_API_KEY)
+groq_client = Groq(api_key=GROQ_API_KEY, timeout=60.0, max_retries=0)
 
 # ========== إعدادات Flask ==========
 flask_app = Flask(__name__)
@@ -44,7 +44,49 @@ def index():
 def health():
     return "OK", 200
 
-# ========== قاموس ترجمة الأنواع (توفير حصة Groq) ==========
+@flask_app.route('/test_groq')
+def test_groq():
+    """فحص الاتصال بـ Groq عبر SDK"""
+    try:
+        r = groq_client.chat.completions.create(
+            model="openai/gpt-oss-120b",
+            messages=[{"role": "user", "content": "قل كلمة: مرحبا"}],
+            temperature=0.2,
+            max_tokens=50,
+        )
+        result = r.choices[0].message.content
+        return f"✅ SDK OK: {result}"
+    except Exception as e:
+        return f"❌ SDK ERROR: {type(e).__name__}: {str(e)}", 500
+
+@flask_app.route('/test_groq_http')
+def test_groq_http():
+    """فحص الاتصال بـ Groq عبر HTTP مباشر"""
+    try:
+        import requests
+        resp = requests.post(
+            "https://api.groq.com/openai/v1/chat/completions",
+            headers={
+                "Authorization": f"Bearer {GROQ_API_KEY}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": "openai/gpt-oss-120b",
+                "messages": [{"role": "user", "content": "قل كلمة: مرحبا"}],
+                "temperature": 0.2,
+                "max_tokens": 50,
+            },
+            timeout=60,
+        )
+        if resp.status_code != 200:
+            return f"❌ HTTP {resp.status_code}: {resp.text[:300]}", 500
+        data = resp.json()
+        result = data["choices"][0]["message"]["content"]
+        return f"✅ HTTP OK: {result}"
+    except Exception as e:
+        return f"❌ HTTP ERROR: {type(e).__name__}: {str(e)}", 500
+
+# ========== قاموس ترجمة الأنواع ==========
 GENRE_CACHE = {
     "Action": "أكشن",
     "Drama": "دراما",
@@ -189,7 +231,7 @@ async def get_unpublished_movie(max_attempts=20):
 
 # ========== دوال الترجمة ==========
 def is_real_arabic(text):
-    """يتأكد إن النص عربي فعلاً - 60% على الأقل حروف عربية"""
+    """يتأكد إن النص عربي فعلاً - 60% على الأقل"""
     if not text or len(text.strip()) < 3:
         return False
     arabic = len(re.findall(r'[\u0600-\u06FF]', text))
@@ -201,7 +243,7 @@ def is_real_arabic(text):
 
 
 def translate_genre(genre_str):
-    """ترجمة النوع من القاموس المحلي (توفير حصة Groq)"""
+    """ترجمة النوع من القاموس المحلي"""
     if not genre_str or genre_str in ["غير معروف", "N/A"]:
         return genre_str
     parts = [g.strip() for g in genre_str.split(",")]
@@ -209,32 +251,40 @@ def translate_genre(genre_str):
     return ", ".join(translated)
 
 
-def translate_with_ai(text, context_type="plot"):
-    """ترجمة النص عبر Groq - ترجع None إذا فشلت كل المحاولات"""
+def translate_with_ai(text, context_type="plot", max_retries=4):
+    """
+    ترجمة عربية عبر Groq:
+    - timeout 60 ثانية
+    - 4 محاولات مع انتظار متزايد
+    - موديلين
+    - يرجع None إذا فشل (ما ينشر إنجليزي)
+    """
     if not text or text in ["غير معروف", "N/A", ""]:
         return text
 
-    # إذا أصلاً عربي، رجّعه كما هو
     if is_real_arabic(text):
         return text
 
-    models = ["openai/gpt-oss-120b", "llama-3.1-8b-instant"]
-
     if context_type == "plot":
         system_prompt = (
-            "أنت مترجم سينمائي محترف. ترجم قصة الفيلم إلى العربية الفصحى بأسلوب مشوق وجذاب. "
+            "أنت مترجم سينمائي محترف. ترجم قصة الفيلم إلى العربية الفصحى بأسلوب مشوق. "
             "قواعد صارمة: (1) اكتب بالعربية فقط. (2) ممنوع أي حرف إنجليزي. "
             "(3) لا تكتب مقدمات مثل 'الترجمة:' أو 'Here is'. "
-            "(4) أعطني النص المترجم فقط بدون أي شرح."
+            "(4) أعطني النص المترجم فقط."
         )
     else:
-        system_prompt = (
-            "ترجم النص إلى العربية الفصحى. اكتب بالعربية فقط بدون أي مقدمات."
-        )
+        system_prompt = "ترجم النص إلى العربية الفصحى. اكتب بالعربية فقط بدون مقدمات."
+
+    models = ["openai/gpt-oss-120b", "llama-3.1-8b-instant"]
 
     for model in models:
-        for attempt in range(2):
+        for attempt in range(max_retries):
             try:
+                if attempt > 0:
+                    wait_time = attempt * 2
+                    logger.info(f"⏳ انتظار {wait_time}s قبل المحاولة {attempt+1}...")
+                    time.sleep(wait_time)
+
                 response = groq_client.chat.completions.create(
                     model=model,
                     messages=[
@@ -250,26 +300,85 @@ def translate_with_ai(text, context_type="plot"):
                     if content and content.strip():
                         translated = content.strip()
 
-                        # نشيل البادئات الشائعة
                         for prefix in ["الترجمة:", "Translation:", "Here is", "بالعربية:"]:
                             if translated.startswith(prefix):
                                 translated = translated[len(prefix):].strip()
 
-                        # ✅ التحقق الحقيقي: 60% عربي
                         if is_real_arabic(translated):
-                            logger.info(f"✅ Translation OK ({context_type}, {model})")
+                            logger.info(f"✅ ترجمة ناجحة ({context_type}, {model}, محاولة {attempt+1})")
                             return translated
                         else:
-                            logger.warning(f"⚠️ Not Arabic enough ({model}): {translated[:60]}")
-
-                time.sleep(0.5)
+                            logger.warning(f"⚠️ النص مو عربي كفاية ({model}): {translated[:60]}")
 
             except Exception as e:
-                logger.error(f"❌ Translation failed ({model}, try {attempt+1}): {e}")
-                time.sleep(1)
+                logger.error(f"❌ فشل ({model}, محاولة {attempt+1}): {type(e).__name__}: {e}")
 
-    # 🚫 لا نرجع النص الإنجليزي أبداً
-    logger.error(f"🚨 All translation attempts failed: {text[:50]}")
+    logger.error(f"🚨 فشلت كل محاولات الترجمة: {text[:50]}")
+    return None
+
+
+def translate_with_http(text, context_type="plot"):
+    """نسخة احتياطية عبر HTTP مباشر (بدون SDK)"""
+    if not text or text in ["غير معروف", "N/A", ""]:
+        return text
+    if is_real_arabic(text):
+        return text
+
+    try:
+        import requests
+    except ImportError:
+        logger.error("مكتبة requests غير مثبتة")
+        return None
+
+    if context_type == "plot":
+        system_prompt = "ترجم قصة الفيلم إلى العربية الفصحى فقط. بدون أي مقدمات."
+    else:
+        system_prompt = "ترجم إلى العربية فقط."
+
+    models = ["openai/gpt-oss-120b", "llama-3.1-8b-instant"]
+
+    for model in models:
+        for attempt in range(3):
+            try:
+                if attempt > 0:
+                    time.sleep(attempt * 2)
+
+                resp = requests.post(
+                    "https://api.groq.com/openai/v1/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {GROQ_API_KEY}",
+                        "Content-Type": "application/json",
+                    },
+                    json={
+                        "model": model,
+                        "messages": [
+                            {"role": "system", "content": system_prompt},
+                            {"role": "user", "content": text}
+                        ],
+                        "temperature": 0.2,
+                        "max_tokens": 1024,
+                    },
+                    timeout=60,
+                )
+
+                if resp.status_code != 200:
+                    logger.error(f"❌ HTTP {resp.status_code}: {resp.text[:200]}")
+                    continue
+
+                data = resp.json()
+                translated = data["choices"][0]["message"]["content"].strip()
+
+                for prefix in ["الترجمة:", "Translation:", "Here is", "بالعربية:"]:
+                    if translated.startswith(prefix):
+                        translated = translated[len(prefix):].strip()
+
+                if is_real_arabic(translated):
+                    logger.info(f"✅ ترجمة HTTP ناجحة ({model})")
+                    return translated
+
+            except Exception as e:
+                logger.error(f"❌ HTTP فشل ({model}, try {attempt+1}): {type(e).__name__}: {e}")
+
     return None
 
 
@@ -277,10 +386,15 @@ def format_movie_message_arabic(movie_info):
     if not movie_info:
         return "الفيلم غير موجود!"
 
+    # نحاول SDK أولاً، ثم HTTP إذا فشل
     plot_arabic = translate_with_ai(movie_info['plot'], "plot")
+
+    if plot_arabic is None:
+        logger.info("🔄 SDK فشل، نجرب HTTP...")
+        plot_arabic = translate_with_http(movie_info['plot'], "plot")
+
     genre_arabic = translate_genre(movie_info['genre'])
 
-    # إذا فشلت ترجمة القصة → نص بديل عربي
     if plot_arabic is None:
         plot_arabic = "📝 القصة غير متوفرة بالعربية حالياً."
 
@@ -516,10 +630,7 @@ async def auto_publish(app):
 def publish_now():
     def do_publish():
         try:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            movie_data = loop.run_until_complete(get_unpublished_movie())
-            loop.close()
+            movie_data = asyncio.run(get_unpublished_movie())
 
             if movie_data and application is not None:
                 movie_info = {
@@ -543,26 +654,20 @@ def publish_now():
 
                 bot = application.bot
                 if poster_url and poster_url != "N/A":
-                    loop2 = asyncio.new_event_loop()
-                    asyncio.set_event_loop(loop2)
-                    loop2.run_until_complete(bot.send_photo(chat_id=CHANNEL_ID, photo=poster_url, caption=caption))
-                    loop2.close()
+                    asyncio.run(bot.send_photo(chat_id=CHANNEL_ID, photo=poster_url, caption=caption))
                 else:
-                    loop2 = asyncio.new_event_loop()
-                    asyncio.set_event_loop(loop2)
-                    loop2.run_until_complete(bot.send_message(chat_id=CHANNEL_ID, text=caption))
-                    loop2.close()
+                    asyncio.run(bot.send_message(chat_id=CHANNEL_ID, text=caption))
 
                 imdb_id = movie_info.get("imdb_id")
                 if imdb_id:
                     save_published_movie(movie_info['title'], imdb_id)
 
                 published = load_published_movies()
-                logger.info(f"Auto-published: {movie_info['title']} (total: {len(published)})")
+                logger.info(f"Published via /publish_now: {movie_info['title']} (total: {len(published)})")
             else:
-                logger.warning("No new movie found for auto-publish")
+                logger.warning("No new movie found for /publish_now")
         except Exception as e:
-            logger.error(f"Auto-publish error: {e}", exc_info=True)
+            logger.error(f"publish_now error: {e}", exc_info=True)
 
     threading.Thread(target=do_publish).start()
     return "Publishing..."
