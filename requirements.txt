@@ -2,3 +2,4 @@ python-telegram-bot==22.8
 aiohttp==3.9.1
 flask
 groq
+requests
