@@ -4,7 +4,9 @@ import asyncio
 import logging
 import aiohttp
 import random
+import re
 import threading
+import time
 from datetime import datetime
 from flask import Flask
 from telegram import Update
@@ -23,7 +25,7 @@ BOT_TOKEN = "8865462282:AAFOQwUBO9eMxhMmLOrBrj5_voIjb4_FgDw"
 OMDB_API_KEY = "72c327f4"
 CHANNEL_ID = "-1001432210812"
 OWNER_ID = 355449817
-GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "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")
+GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
 
 PUBLISHED_FILE = "published_movies.json"
 
@@ -41,6 +43,39 @@ def index():
 @flask_app.route('/health')
 def health():
     return "OK", 200
+
+# ========== قاموس ترجمة الأنواع (توفير حصة Groq) ==========
+GENRE_CACHE = {
+    "Action": "أكشن",
+    "Drama": "دراما",
+    "Comedy": "كوميدي",
+    "Horror": "رعب",
+    "Thriller": "إثارة",
+    "Romance": "رومانسي",
+    "Sci-Fi": "خيال علمي",
+    "Science Fiction": "خيال علمي",
+    "Fantasy": "فانتازيا",
+    "Adventure": "مغامرة",
+    "Animation": "رسوم متحركة",
+    "Crime": "جريمة",
+    "Mystery": "غموض",
+    "Family": "عائلي",
+    "War": "حرب",
+    "Western": "غربي",
+    "Musical": "موسيقي",
+    "Biography": "سيرة ذاتية",
+    "History": "تاريخي",
+    "Sport": "رياضي",
+    "Documentary": "وثائقي",
+    "Music": "موسيقى",
+    "Film-Noir": "نوار",
+    "Short": "قصير",
+    "Adult": "للبالغين",
+    "News": "أخبار",
+    "Talk-Show": "برنامج حواري",
+    "Game-Show": "برنامج مسابقات",
+    "Reality-TV": "واقعي",
+}
 
 # ========== دوال التخزين ==========
 def load_published_movies():
@@ -152,56 +187,102 @@ async def get_unpublished_movie(max_attempts=20):
             continue
     return None
 
-# ========== دالة الترجمة بالذكاء الاصطناعي (Groq) ==========
+# ========== دوال الترجمة ==========
+def is_real_arabic(text):
+    """يتأكد إن النص عربي فعلاً - 60% على الأقل حروف عربية"""
+    if not text or len(text.strip()) < 3:
+        return False
+    arabic = len(re.findall(r'[\u0600-\u06FF]', text))
+    latin = len(re.findall(r'[A-Za-z]', text))
+    total = arabic + latin
+    if total == 0:
+        return False
+    return (arabic / total) >= 0.6
+
+
+def translate_genre(genre_str):
+    """ترجمة النوع من القاموس المحلي (توفير حصة Groq)"""
+    if not genre_str or genre_str in ["غير معروف", "N/A"]:
+        return genre_str
+    parts = [g.strip() for g in genre_str.split(",")]
+    translated = [GENRE_CACHE.get(g, g) for g in parts]
+    return ", ".join(translated)
+
+
 def translate_with_ai(text, context_type="plot"):
+    """ترجمة النص عبر Groq - ترجع None إذا فشلت كل المحاولات"""
     if not text or text in ["غير معروف", "N/A", ""]:
         return text
 
-    try:
-        if context_type == "plot":
-            system_prompt = (
-                "أنت مترجم سينمائي محترف. ترجم قصة الفيلم التالية إلى العربية الفصحى بأسلوب مشوق وجذاب. "
-                "اجعل الترجمة مفهومة وسلسة، وحافظ على روح النص الأصلي. "
-                "تأكد من أن جميع الكلمات بالعربية الفصحى فقط. "
-                "اكتب الترجمة فقط بدون أي مقدمات أو شرح."
-            )
-        elif context_type == "genre":
-            system_prompt = (
-                "أنت مترجم محترف. ترجم أنواع الأفلام التالية إلى العربية. "
-                "مثال: Action إلى أكشن، Drama إلى دراما، Sci-Fi إلى خيال علمي. "
-                "اكتب الترجمة فقط بدون أي إضافات."
-            )
-        else:
-            system_prompt = (
-                "أنت مترجم محترف. ترجم النص التالي إلى العربية الفصحى بأسلوب واضح ومفهوم. "
-                "اكتب الترجمة فقط بدون أي مقدمات."
-            )
+    # إذا أصلاً عربي، رجّعه كما هو
+    if is_real_arabic(text):
+        return text
 
-        response = groq_client.chat.completions.create(
-            model="openai/gpt-oss-120b",
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": text}
-            ],
-            temperature=0.3,
-            max_tokens=1024,
+    models = ["openai/gpt-oss-120b", "llama-3.1-8b-instant"]
+
+    if context_type == "plot":
+        system_prompt = (
+            "أنت مترجم سينمائي محترف. ترجم قصة الفيلم إلى العربية الفصحى بأسلوب مشوق وجذاب. "
+            "قواعد صارمة: (1) اكتب بالعربية فقط. (2) ممنوع أي حرف إنجليزي. "
+            "(3) لا تكتب مقدمات مثل 'الترجمة:' أو 'Here is'. "
+            "(4) أعطني النص المترجم فقط بدون أي شرح."
+        )
+    else:
+        system_prompt = (
+            "ترجم النص إلى العربية الفصحى. اكتب بالعربية فقط بدون أي مقدمات."
         )
 
-        translated = response.choices[0].message.content.strip()
-        logger.info(f"Translation successful ({context_type}): {translated[:60]}...")
-        return translated
+    for model in models:
+        for attempt in range(2):
+            try:
+                response = groq_client.chat.completions.create(
+                    model=model,
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": text}
+                    ],
+                    temperature=0.2,
+                    max_tokens=1024,
+                )
 
-    except Exception as e:
-        logger.error(f"Translation failed: {e}")
-        return text
+                if response.choices and len(response.choices) > 0:
+                    content = response.choices[0].message.content
+                    if content and content.strip():
+                        translated = content.strip()
+
+                        # نشيل البادئات الشائعة
+                        for prefix in ["الترجمة:", "Translation:", "Here is", "بالعربية:"]:
+                            if translated.startswith(prefix):
+                                translated = translated[len(prefix):].strip()
+
+                        # ✅ التحقق الحقيقي: 60% عربي
+                        if is_real_arabic(translated):
+                            logger.info(f"✅ Translation OK ({context_type}, {model})")
+                            return translated
+                        else:
+                            logger.warning(f"⚠️ Not Arabic enough ({model}): {translated[:60]}")
+
+                time.sleep(0.5)
+
+            except Exception as e:
+                logger.error(f"❌ Translation failed ({model}, try {attempt+1}): {e}")
+                time.sleep(1)
+
+    # 🚫 لا نرجع النص الإنجليزي أبداً
+    logger.error(f"🚨 All translation attempts failed: {text[:50]}")
+    return None
+
 
 def format_movie_message_arabic(movie_info):
     if not movie_info:
         return "الفيلم غير موجود!"
 
-    plot_text = movie_info['plot']
-    plot_arabic = translate_with_ai(plot_text, "plot")
-    genre_arabic = translate_with_ai(movie_info['genre'], "genre")
+    plot_arabic = translate_with_ai(movie_info['plot'], "plot")
+    genre_arabic = translate_genre(movie_info['genre'])
+
+    # إذا فشلت ترجمة القصة → نص بديل عربي
+    if plot_arabic is None:
+        plot_arabic = "📝 القصة غير متوفرة بالعربية حالياً."
 
     return f"""
 🎬 {movie_info['title']} ({movie_info['year']})
@@ -462,9 +543,15 @@ def publish_now():
 
                 bot = application.bot
                 if poster_url and poster_url != "N/A":
-                    bot.send_photo(chat_id=CHANNEL_ID, photo=poster_url, caption=caption)
+                    loop2 = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop2)
+                    loop2.run_until_complete(bot.send_photo(chat_id=CHANNEL_ID, photo=poster_url, caption=caption))
+                    loop2.close()
                 else:
-                    bot.send_message(chat_id=CHANNEL_ID, text=caption)
+                    loop2 = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop2)
+                    loop2.run_until_complete(bot.send_message(chat_id=CHANNEL_ID, text=caption))
+                    loop2.close()
 
                 imdb_id = movie_info.get("imdb_id")
                 if imdb_id:
