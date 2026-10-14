@@ -29,7 +29,7 @@ GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
 
 PUBLISHED_FILE = "published_movies.json"
 
-# ========== إعدادات Groq ==========
+# ========== إعدادات Groq SDK (fallback) ==========
 groq_client = Groq(api_key=GROQ_API_KEY, timeout=60.0, max_retries=0)
 
 # ========== إعدادات Flask ==========
@@ -251,74 +251,14 @@ def translate_genre(genre_str):
     return ", ".join(translated)
 
 
-def translate_with_ai(text, context_type="plot", max_retries=4):
-    """
-    ترجمة عربية عبر Groq:
-    - timeout 60 ثانية
-    - 4 محاولات مع انتظار متزايد
-    - موديلين
-    - يرجع None إذا فشل (ما ينشر إنجليزي)
-    """
-    if not text or text in ["غير معروف", "N/A", ""]:
-        return text
-
-    if is_real_arabic(text):
-        return text
-
-    if context_type == "plot":
-        system_prompt = (
-            "أنت مترجم سينمائي محترف. ترجم قصة الفيلم إلى العربية الفصحى بأسلوب مشوق. "
-            "قواعد صارمة: (1) اكتب بالعربية فقط. (2) ممنوع أي حرف إنجليزي. "
-            "(3) لا تكتب مقدمات مثل 'الترجمة:' أو 'Here is'. "
-            "(4) أعطني النص المترجم فقط."
-        )
-    else:
-        system_prompt = "ترجم النص إلى العربية الفصحى. اكتب بالعربية فقط بدون مقدمات."
-
-    models = ["openai/gpt-oss-120b", "llama-3.1-8b-instant"]
-
-    for model in models:
-        for attempt in range(max_retries):
-            try:
-                if attempt > 0:
-                    wait_time = attempt * 2
-                    logger.info(f"⏳ انتظار {wait_time}s قبل المحاولة {attempt+1}...")
-                    time.sleep(wait_time)
-
-                response = groq_client.chat.completions.create(
-                    model=model,
-                    messages=[
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": text}
-                    ],
-                    temperature=0.2,
-                    max_tokens=1024,
-                )
-
-                if response.choices and len(response.choices) > 0:
-                    content = response.choices[0].message.content
-                    if content and content.strip():
-                        translated = content.strip()
-
-                        for prefix in ["الترجمة:", "Translation:", "Here is", "بالعربية:"]:
-                            if translated.startswith(prefix):
-                                translated = translated[len(prefix):].strip()
-
-                        if is_real_arabic(translated):
-                            logger.info(f"✅ ترجمة ناجحة ({context_type}, {model}, محاولة {attempt+1})")
-                            return translated
-                        else:
-                            logger.warning(f"⚠️ النص مو عربي كفاية ({model}): {translated[:60]}")
-
-            except Exception as e:
-                logger.error(f"❌ فشل ({model}, محاولة {attempt+1}): {type(e).__name__}: {e}")
-
-    logger.error(f"🚨 فشلت كل محاولات الترجمة: {text[:50]}")
-    return None
-
-
 def translate_with_http(text, context_type="plot"):
-    """نسخة احتياطية عبر HTTP مباشر (بدون SDK)"""
+    """
+    الترجمة الأساسية عبر HTTP مباشر (أخف وأسرع من SDK):
+    - timeout 60 ثانية
+    - 3 محاولات مع انتظار متزايد
+    - موديلين
+    - يرجع None إذا فشل
+    """
     if not text or text in ["غير معروف", "N/A", ""]:
         return text
     if is_real_arabic(text):
@@ -331,9 +271,14 @@ def translate_with_http(text, context_type="plot"):
         return None
 
     if context_type == "plot":
-        system_prompt = "ترجم قصة الفيلم إلى العربية الفصحى فقط. بدون أي مقدمات."
+        system_prompt = (
+            "أنت مترجم سينمائي محترف. ترجم قصة الفيلم إلى العربية الفصحى بأسلوب مشوق. "
+            "قواعد صارمة: (1) اكتب بالعربية فقط. (2) ممنوع أي حرف إنجليزي. "
+            "(3) لا تكتب مقدمات مثل 'الترجمة:' أو 'Here is'. "
+            "(4) أعطني النص المترجم فقط."
+        )
     else:
-        system_prompt = "ترجم إلى العربية فقط."
+        system_prompt = "ترجم النص إلى العربية الفصحى. اكتب بالعربية فقط بدون مقدمات."
 
     models = ["openai/gpt-oss-120b", "llama-3.1-8b-instant"]
 
@@ -373,11 +318,71 @@ def translate_with_http(text, context_type="plot"):
                         translated = translated[len(prefix):].strip()
 
                 if is_real_arabic(translated):
-                    logger.info(f"✅ ترجمة HTTP ناجحة ({model})")
+                    logger.info(f"✅ ترجمة HTTP ناجحة ({context_type}, {model}, محاولة {attempt+1})")
                     return translated
+                else:
+                    logger.warning(f"⚠️ النص مو عربي كفاية ({model}): {translated[:60]}")
 
             except Exception as e:
                 logger.error(f"❌ HTTP فشل ({model}, try {attempt+1}): {type(e).__name__}: {e}")
+
+    return None
+
+
+def translate_with_ai(text, context_type="plot", max_retries=3):
+    """
+    نسخة احتياطية عبر SDK (إذا HTTP فشل)
+    """
+    if not text or text in ["غير معروف", "N/A", ""]:
+        return text
+    if is_real_arabic(text):
+        return text
+
+    if context_type == "plot":
+        system_prompt = (
+            "أنت مترجم سينمائي محترف. ترجم قصة الفيلم إلى العربية الفصحى بأسلوب مشوق. "
+            "قواعد صارمة: (1) اكتب بالعربية فقط. (2) ممنوع أي حرف إنجليزي. "
+            "(3) لا تكتب مقدمات مثل 'الترجمة:' أو 'Here is'. "
+            "(4) أعطني النص المترجم فقط."
+        )
+    else:
+        system_prompt = "ترجم النص إلى العربية الفصحى. اكتب بالعربية فقط بدون مقدمات."
+
+    models = ["openai/gpt-oss-120b", "llama-3.1-8b-instant"]
+
+    for model in models:
+        for attempt in range(max_retries):
+            try:
+                if attempt > 0:
+                    time.sleep(attempt * 2)
+
+                response = groq_client.chat.completions.create(
+                    model=model,
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": text}
+                    ],
+                    temperature=0.2,
+                    max_tokens=1024,
+                )
+
+                if response.choices and len(response.choices) > 0:
+                    content = response.choices[0].message.content
+                    if content and content.strip():
+                        translated = content.strip()
+
+                        for prefix in ["الترجمة:", "Translation:", "Here is", "بالعربية:"]:
+                            if translated.startswith(prefix):
+                                translated = translated[len(prefix):].strip()
+
+                        if is_real_arabic(translated):
+                            logger.info(f"✅ ترجمة SDK ناجحة ({context_type}, {model}, محاولة {attempt+1})")
+                            return translated
+                        else:
+                            logger.warning(f"⚠️ النص مو عربي كفاية ({model}): {translated[:60]}")
+
+            except Exception as e:
+                logger.error(f"❌ SDK فشل ({model}, محاولة {attempt+1}): {type(e).__name__}: {e}")
 
     return None
 
@@ -386,12 +391,13 @@ def format_movie_message_arabic(movie_info):
     if not movie_info:
         return "الفيلم غير موجود!"
 
-    # نحاول SDK أولاً، ثم HTTP إذا فشل
-    plot_arabic = translate_with_ai(movie_info['plot'], "plot")
+    # ✅ HTTP هو الأساس (أسرع وأخف)
+    plot_arabic = translate_with_http(movie_info['plot'], "plot")
 
+    # 🔄 إذا HTTP فشل، نجرب SDK
     if plot_arabic is None:
-        logger.info("🔄 SDK فشل، نجرب HTTP...")
-        plot_arabic = translate_with_http(movie_info['plot'], "plot")
+        logger.info("🔄 HTTP فشل، نجرب SDK...")
+        plot_arabic = translate_with_ai(movie_info['plot'], "plot")
 
     genre_arabic = translate_genre(movie_info['genre'])
 
@@ -675,6 +681,9 @@ def publish_now():
 # ========== تشغيل البوت ==========
 def main():
     global application
+
+    if not GROQ_API_KEY:
+        logger.error("⚠️ GROQ_API_KEY غير موجود في Environment Variables!")
 
     application = Application.builder().token(BOT_TOKEN).build()
 
